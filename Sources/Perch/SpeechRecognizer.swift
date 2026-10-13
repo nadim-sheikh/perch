@@ -3,9 +3,62 @@ import FluidAudio
 import Speech
 
 enum SpeechEngine: String, CaseIterable, Identifiable {
-    case parakeet, apple
+    case parakeet, scribe
     var id: String { rawValue }
-    var title: String { self == .parakeet ? "Parakeet (on-device)" : "Apple" }
+    var title: String { self == .parakeet ? "Parakeet (on-device)" : "ElevenLabs Scribe" }
+}
+
+/// ElevenLabs Scribe through OpenRouter's transcription endpoint, using the same OpenRouter key.
+enum CloudTranscriber {
+    static let model = "elevenlabs/scribe-v2"
+
+    /// Returns nil on any failure so the caller can fall back to on-device speech.
+    static func transcribe(_ samples: [Float]) async -> String? {
+        let key = await AppSettings.shared.openrouterKey
+        guard !key.isEmpty, samples.count > 8_000 else { return nil }
+        var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/audio/transcriptions")!, timeoutInterval: 15)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "model": model,
+            "input_audio": ["data": wav(samples).base64EncodedString(), "format": "wav"],
+            "provider": ["sort": "latency"],
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let text = json["text"] as? String else {
+                DebugLog.write("scribe: HTTP \(status) \(String(data: data.prefix(200), encoding: .utf8) ?? "")")
+                return nil
+            }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            DebugLog.write("scribe: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// 16 kHz mono 16-bit PCM WAV.
+    private static func wav(_ samples: [Float]) -> Data {
+        var pcm = Data(capacity: samples.count * 2)
+        for s in samples {
+            var v = Int16(max(-1, min(1, s)) * Float(Int16.max)).littleEndian
+            withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0) }
+        }
+        var d = Data()
+        func u32(_ x: UInt32) { var v = x.littleEndian; withUnsafeBytes(of: &v) { d.append(contentsOf: $0) } }
+        func u16(_ x: UInt16) { var v = x.littleEndian; withUnsafeBytes(of: &v) { d.append(contentsOf: $0) } }
+        d.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + pcm.count))
+        d.append(contentsOf: Array("WAVEfmt ".utf8)); u32(16); u16(1); u16(1)
+        u32(16_000); u32(32_000); u16(2); u16(16)
+        d.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count))
+        d.append(pcm)
+        return d
+    }
 }
 
 /// Loads and runs NVIDIA Parakeet locally on the Neural Engine.
@@ -52,11 +105,12 @@ actor Parakeet {
 }
 
 /// Push-to-talk speech input. `start()` on key down, `stop()` on release returns the text.
-/// Uses Parakeet when its model is ready, otherwise Apple's recognizer.
+/// Uses Scribe or Parakeet as chosen; Apple's recognizer only while Parakeet's model is still loading.
 @MainActor
 final class SpeechRecognizer {
     private let engine = AVAudioEngine()
     private var usingParakeet = false
+    private var usingScribe = false
 
     // Parakeet path: 16 kHz mono samples
     private var samples: [Float] = []
@@ -83,12 +137,6 @@ final class SpeechRecognizer {
 
     static func requestPermissions() async -> Bool {
         let mic = await AVCaptureDevice.requestAccess(for: .audio)
-        if preferredEngine == .apple {
-            let speech = await withCheckedContinuation { cont in
-                SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0 == .authorized) }
-            }
-            return speech && mic
-        }
         return mic
     }
 
@@ -101,7 +149,9 @@ final class SpeechRecognizer {
     func start() async throws {
         cancel()
         let gen = generation
-        usingParakeet = Self.preferredEngine == .parakeet ? await Parakeet.shared.isReady : false
+        let parakeetReady = await Parakeet.shared.isReady
+        usingScribe = Self.preferredEngine == .scribe && AppSettings.shared.hasKey
+        usingParakeet = usingScribe || (Self.preferredEngine == .parakeet && parakeetReady)
         guard gen == generation else { throw CancellationError() }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -121,7 +171,8 @@ final class SpeechRecognizer {
                     self?.onLevel?(level)
                 }
             }
-            startPartials()
+            // Scribe has no live words; show Parakeet's while talking if it is already loaded.
+            if !usingScribe || parakeetReady { startPartials() }
         } else {
             latestTranscript = ""
             let request = SFSpeechAudioBufferRecognitionRequest()
@@ -163,6 +214,7 @@ final class SpeechRecognizer {
             partialTask?.cancel()
             let audio = samples
             samples.removeAll()
+            if usingScribe, let text = await CloudTranscriber.transcribe(audio) { return text }
             return await Parakeet.shared.transcribe(audio)
         }
         request?.endAudio()

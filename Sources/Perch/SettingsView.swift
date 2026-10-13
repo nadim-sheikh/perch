@@ -392,8 +392,10 @@ private struct MicrophonePage: View {
 
     var body: some View {
         SettingsGroup(title: "Speech to text") {
-            SettingsRow(title: "Engine", subtitle: engine == SpeechEngine.parakeet.rawValue
-                        ? "NVIDIA Parakeet, runs privately on your Mac." : "Apple's built-in recognizer.") {
+            SettingsRow(title: "Engine", subtitle: engine == SpeechEngine.scribe.rawValue
+                        ? "ElevenLabs Scribe v2 through your OpenRouter key. Most accurate, about $0.11 per hour of talking."
+                        : "NVIDIA Parakeet, runs privately on your Mac. Free and offline.",
+                        last: engine == SpeechEngine.scribe.rawValue) {
                 Picker("", selection: $engine) {
                     ForEach(SpeechEngine.allCases) { Text($0.title).tag($0.rawValue) }
                 }
