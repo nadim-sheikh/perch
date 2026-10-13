@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleExecutable</key><string>Perch</string>
     <key>CFBundleIdentifier</key><string>dev.perch.app</string>
     <key>CFBundleName</key><string>Perch</string>

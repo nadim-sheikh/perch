@@ -79,6 +79,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var homeCover: NSView?
+    private var homeMonitors: [Any] = []
+    private var homeObservers: [NSObjectProtocol] = []
+    private var homeIdleTimer: Timer?
+    private var homeLastActivity = Date()
+
+    /// Home collapses back into the notch on an outside click, app switch, Escape,
+    /// or after a while with no activity (like the notch itself).
+    private func armHomeDismissal() {
+        disarmHomeDismissal()
+        homeLastActivity = Date()
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let w = self.homeWindow, !w.frame.contains(NSEvent.mouseLocation) else { return }
+                if NotchModel.shared.textInputOpen { return }
+                self.hideHome()
+            }
+        }) { homeMonitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel, .mouseMoved], handler: { [weak self] e in
+            MainActor.assumeIsolated { self?.homeLastActivity = Date() }
+            return e
+        }) { homeMonitors.append(m) }
+        let ws = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated {
+                if app?.processIdentifier != ProcessInfo.processInfo.processIdentifier { self?.hideHome() }
+            }
+        }
+        homeObservers.append(ws)
+        homeIdleTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let w = self.homeWindow else { return }
+                let inside = w.frame.contains(NSEvent.mouseLocation)
+                if inside { self.homeLastActivity = Date() }
+                let busy = BuddyState.shared.phase != .idle
+                if !busy && Date().timeIntervalSince(self.homeLastActivity) > 45 { self.hideHome() }
+            }
+        }
+    }
+
+    private func disarmHomeDismissal() {
+        homeMonitors.forEach { NSEvent.removeMonitor($0) }
+        homeMonitors.removeAll()
+        homeObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        homeObservers.removeAll()
+        homeIdleTimer?.invalidate()
+        homeIdleTimer = nil
+    }
 
     /// The notch's own rectangle at the top of the screen (where Home morphs from/to).
     private func notchFrame(_ screen: NSScreen) -> NSRect {
@@ -131,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if w.isVisible && w.alphaValue > 0.9 { w.makeKeyAndOrderFront(nil); return }
 
         NotchModel.shared.homeOpen = true
+        armHomeDismissal()
         cover.alphaValue = 1
         w.alphaValue = 1
         w.setFrame(notchFrame(screen), display: false)
@@ -149,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hideHome() {
         guard let w = homeWindow, w.isVisible, let cover = homeCover else { return }
+        disarmHomeDismissal()
         let screen = NSScreen.screens.first ?? NSScreen.main!
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.12

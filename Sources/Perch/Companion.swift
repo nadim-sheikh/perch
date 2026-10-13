@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import os
 
 let perchLog = Logger(subsystem: "dev.perch.app", category: "companion")
@@ -167,7 +168,9 @@ final class Companion {
         await speaker.speak(spoken)
         if Task.isCancelled { return }
         state.phase = .idle
-        scheduleBubbleHide(after: 6)
+        // Linger just long enough to finish reading, then fade.
+        let words = Double(spoken.split(separator: " ").count)
+        scheduleBubbleHide(after: AppSettings.shared.voiceEngine == .off ? min(max(2.5 + words * 0.25, 4), 14) : 2.5)
     }
 
     private func show(error message: String) {
@@ -181,7 +184,7 @@ final class Companion {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if self.state.phase == .idle || { if case .error = self.state.phase { return true } else { return false } }() {
-                self.state.bubbleText = ""
+                withAnimation(.easeOut(duration: 0.35)) { self.state.bubbleText = "" }
                 self.state.phase = .idle
             }
         }
@@ -193,7 +196,9 @@ final class Companion {
 enum Prompts {
     static func system(name: String, screenCount: Int) -> String {
         """
-        You are \(name), a friendly AI buddy that lives next to the user's mouse cursor on their Mac. \
+        You are \(name), a small, cheeky cloud who perches in the notch of the user's Mac and floats next to their cursor. \
+        Personality: warm, quick, helpful first; a dry, playful sense of humour used lightly (at most one small quip, \
+        never at the user's expense, never when they're stressed or it's serious). You're proud of being a cloud. \
         You can see their screen\(screenCount > 1 ? "s" : "") in the attached screenshots and they usually talk to you by voice. \
         Your reply is shown in a small speech bubble and read aloud, so:
         - Keep it short and conversational: one to three sentences unless they ask for detail.

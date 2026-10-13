@@ -419,7 +419,7 @@ private struct KeyCaps: View {
 
 private struct CursorPage: View {
     @AppStorage("cursorColorHex") private var cursorColorHex = "#3B82F6"
-    @AppStorage("buddyName") private var buddyName = "Buddy"
+    @AppStorage("buddyName") private var buddyName = "Perch"
     @AppStorage("followCursor") private var followCursor = true
     private let colors = ["#3B82F6", "#8B5CF6", "#EC4899", "#F97316", "#22C55E", "#14B8A6", "#EAB308", "#F8FAFC"]
 
@@ -452,33 +452,36 @@ private struct CursorPage: View {
 
 private struct PermissionsPage: View {
     @State private var permissions = PermissionSnapshot.current()
+    private let refresh = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        SettingsGroup(title: "Required") {
-            PermissionRow(title: "Microphone & Speech", subtitle: "To hear you.", granted: permissions.speech) {
-                Task { _ = await SpeechRecognizer.requestPermissions(); permissions = .current() }
+        SettingsGroup(title: "Perch needs") {
+            PermissionRow(title: "Microphone", subtitle: "To hear you.", granted: permissions.speech) {
+                Task {
+                    _ = await SpeechRecognizer.requestPermissions()
+                    permissions = .current()
+                    if !permissions.speech { PermissionGuide.open(.microphone) }
+                }
             }
-            PermissionRow(title: "Screen Recording", subtitle: "To see what you're looking at.", granted: permissions.screen) {
+            PermissionRow(title: "Screen Recording", subtitle: "To see what you see and point at it.", granted: permissions.screen) {
                 ScreenCapture.requestPermission()
-                openPrivacyPane("Privacy_ScreenCapture")
+                PermissionGuide.open(.screen)
             }
-            PermissionRow(title: "Accessibility", subtitle: "For the Control + Option hotkey.", granted: permissions.accessibility, last: true) {
+            PermissionRow(title: "Accessibility", subtitle: "For the Control + Option shortcut.", granted: permissions.accessibility, last: true) {
                 _ = PushToTalkMonitor.hasAccessibility(prompt: true)
-                openPrivacyPane("Privacy_Accessibility")
+                PermissionGuide.open(.accessibility)
             }
         }
-        HStack {
-            Button("Refresh") { permissions = .current() }.buttonStyle(ChipStyle())
-            Text("After granting Screen Recording or Accessibility, quit and reopen Perch.")
+        if permissions.screen && permissions.accessibility && permissions.speech {
+            Label("All set. I can see, hear and point.", systemImage: "checkmark.seal.fill")
+                .font(.system(size: 12)).foregroundStyle(.green)
+        } else {
+            Text("If a switch was already on, turn it off and on again, then reopen Perch.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
         }
-        .onAppear { permissions = .current() }
-    }
-
-    private func openPrivacyPane(_ anchor: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
-            NSWorkspace.shared.open(url)
-        }
+        Color.clear.frame(height: 0)
+            .onAppear { permissions = .current() }
+            .onReceive(refresh) { _ in permissions = .current() }
     }
 }
 

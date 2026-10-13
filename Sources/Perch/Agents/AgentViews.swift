@@ -113,11 +113,12 @@ struct AgentChatView: View {
 struct AgentTurnView: View {
     let agent: BuddyAgent
     let turn: AgentTurn
+    var showPrompt = true
     @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            MessageBubble(message: Message(role: .user, text: turn.prompt))
+            if showPrompt { MessageBubble(message: Message(role: .user, text: turn.prompt)) }
 
             if turn.state == .working {
                 workingView

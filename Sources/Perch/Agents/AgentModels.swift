@@ -135,6 +135,13 @@ final class AgentRoster: ObservableObject {
         if let i = agents.firstIndex(where: { $0.id == agent.id }) { agents[i] = agent }
     }
 
+    /// Moves the helper's folder to the Trash and forgets it.
+    func delete(_ slug: String) {
+        guard let a = agent(slug) else { return }
+        try? FileManager.default.trashItem(at: a.folder, resultingItemURL: nil)
+        agents.removeAll { $0.id == slug }
+    }
+
     func setArchived(_ slug: String, _ archived: Bool) {
         guard var a = agent(slug) else { return }
         a.archived = archived

@@ -305,7 +305,9 @@ struct NotchRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
-                if model.presentation == .listening { CornerGlow(color: accent).frame(width: size.width + 60, height: size.height + 40) }
+                if model.presentation == .listening {
+                    CornerGlow(color: accent).frame(width: size.width + 60, height: size.height + 40).id("glow")
+                }
 
                 NotchShape(radius: model.presentation.isCard ? 24 : 11)
                     .fill(Color.black)
@@ -744,7 +746,6 @@ struct CornerGlow: View {
             .blendMode(.plusLighter)
         }
         .allowsHitTesting(false)
-        .transition(.opacity.animation(.easeIn(duration: 0.4)))
     }
 }
 

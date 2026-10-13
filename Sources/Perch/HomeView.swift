@@ -47,9 +47,18 @@ final class HomeRouter: ObservableObject {
     /// Agent whose chat is open (takes priority over a buddy chat).
     @Published var selectedAgent: String?
     @Published var showNewAgent = false
+    @Published var showNewGroup = false
+    @Published var selectedGroup: UUID?
+
+    func openGroup(_ id: UUID) {
+        settings = nil
+        selectedAgent = nil
+        selectedGroup = id
+    }
 
     func openAgent(_ slug: String) {
         settings = nil
+        selectedGroup = nil
         selectedAgent = slug
         AgentManager.shared.clearUnread(slug)
     }
@@ -57,6 +66,7 @@ final class HomeRouter: ObservableObject {
     func openChat(_ id: UUID?) {
         settings = nil
         selectedAgent = nil
+        selectedGroup = nil
         ConversationStore.shared.selectedID = id
     }
 }
@@ -82,6 +92,8 @@ struct HomeView: View {
                 Group {
                     if let section = router.settings {
                         SettingsPage(section: section)
+                    } else if let gid = router.selectedGroup, let group = GroupStore.shared.group(gid) {
+                        GroupChatView(group: group).id(gid)
                     } else if let slug = router.selectedAgent, let agent = AgentRoster.shared.agent(slug) {
                         AgentChatView(agent: agent).id(slug)
                     } else if let c = store.selected {
@@ -105,10 +117,19 @@ struct HomeView: View {
                 .allowsHitTesting(false)
         }
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous))
-        .overlay(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous)
-            .stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .overlay(alignment: .bottom) {
+            // Hairline only on the lower edge so the top melts into the notch.
+            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous)
+                .stroke(LinearGradient(colors: [.clear, .white.opacity(0.08)], startPoint: .top, endPoint: .center), lineWidth: 1)
+        }
         .frame(minWidth: 760, minHeight: 480)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $router.showNewGroup) {
+            NewGroupSheet { group in
+                router.showNewGroup = false
+                if let group { router.openGroup(group.id) }
+            }
+        }
         .sheet(isPresented: $router.showNewAgent) {
             NewAgentSheet { agent in
                 router.showNewAgent = false
@@ -123,10 +144,24 @@ struct HomeView: View {
 struct HomeSidebar: View {
     @ObservedObject var router = HomeRouter.shared
     @ObservedObject var store = ConversationStore.shared
-    @AppStorage("buddyName") private var buddyName = "Buddy"
+    @AppStorage("buddyName") private var buddyName = "Perch"
 
     @ObservedObject var roster = AgentRoster.shared
     @ObservedObject var agents = AgentManager.shared
+    @ObservedObject var groups = GroupStore.shared
+
+    private func confirmDelete(_ a: BuddyAgent) {
+        let alert = NSAlert()
+        alert.messageText = "Delete \(a.name)?"
+        alert.informativeText = "Their folder and memory go to the Trash. Poof, like a cloud."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.level = .statusBar + 3
+        if alert.runModal() == .alertFirstButtonReturn {
+            if router.selectedAgent == a.id { router.selectedAgent = nil }
+            AgentManager.shared.delete(a.id)
+        }
+    }
 
     var filteredAgents: [BuddyAgent] {
         let q = router.search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -161,6 +196,7 @@ struct HomeSidebar: View {
                 Menu {
                     Button("New chat") { router.openChat(store.newConversation()) }
                     Button("New helper…") { router.showNewAgent = true }
+                    Button("New squad (group chat)…") { router.showNewGroup = true }
                 } label: { Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.textSecondary) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden)
                     .frame(width: 28, height: 28)
@@ -171,12 +207,18 @@ struct HomeSidebar: View {
 
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    ForEach(groups.groups) { g in
+                        GroupRow(group: g, selected: router.selectedGroup == g.id)
+                            .onTapGesture { router.openGroup(g.id) }
+                            .contextMenu { Button("Delete squad", role: .destructive) { groups.delete(g.id) } }
+                    }
                     ForEach(filteredAgents) { a in
                         AgentRow(agent: a, selected: router.selectedAgent == a.id)
                             .onTapGesture { router.openAgent(a.id) }
                             .contextMenu {
                                 Button("Open folder") { NSWorkspace.shared.open(a.folder) }
                                 Button("Archive") { AgentRoster.shared.setArchived(a.id, true) }
+                                Button("Delete…", role: .destructive) { confirmDelete(a) }
                             }
                     }
                     if !filtered.isEmpty {
@@ -296,7 +338,14 @@ struct LogoGlyph: View {
 // MARK: Main area
 
 struct HomeEmptyState: View {
-    @AppStorage("buddyName") private var buddyName = "Buddy"
+    @AppStorage("buddyName") private var buddyName = "Perch"
+    private let tagline = [
+        "Hold Control + Option and hand me a chore.",
+        "Hold Control + Option. I'm all ears. Well, all cloud.",
+        "Hold Control + Option and point me at a problem.",
+        "Need a hand? I've got two tiny ones.",
+        "Double-tap Control if you'd rather type.",
+    ].randomElement()!
 
     private var greeting: String {
         let h = Calendar.current.component(.hour, from: Date())
@@ -314,7 +363,7 @@ struct HomeEmptyState: View {
                 MascotView(size: 96, animated: true, showHands: true)
             }
             Text(greeting).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.textPrimary)
-            Text("Hold Control + Option and tell me what you need.")
+            Text(tagline)
                 .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
             Spacer()
             TypeField().frame(width: 320).padding(.bottom, 24)
@@ -325,7 +374,7 @@ struct HomeEmptyState: View {
 struct ConversationView: View {
     let conversation: Conversation
     @ObservedObject var store = ConversationStore.shared
-    @AppStorage("buddyName") private var buddyName = "Buddy"
+    @AppStorage("buddyName") private var buddyName = "Perch"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -344,7 +393,7 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         MessageBubble(message: Message(role: .assistant,
-                            text: "Type below whenever you're ready, or hold Control and Option to just talk to me."), dimmed: true)
+                            text: "Type below, or hold Control + Option and just talk. I don't bite. I'm vapour."), dimmed: true)
                         ForEach(conversation.messages) { m in
                             MessageBubble(message: m) {
                                 if let last = conversation.messages.last(where: { $0.role == .user }) {
@@ -415,7 +464,7 @@ struct MessageBubble: View {
         case .error:
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("This attempt couldn't finish. Try again.", systemImage: "info.circle")
+                    Label("My cloud got a bit tangled. Want to try again?", systemImage: "cloud.drizzle")
                         .font(.system(size: 12)).foregroundStyle(Theme.textPrimary.opacity(0.85))
                     DisclosureGroup("Technical details") {
                         Text(message.text).font(.system(size: 11, design: .monospaced))

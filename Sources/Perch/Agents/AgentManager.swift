@@ -33,25 +33,27 @@ final class AgentManager: ObservableObject {
 
     // MARK: Launching
 
-    func launch(slug: String, prompt: String, screenshot: CapturedScreen? = nil) {
-        guard let agent = roster.agent(slug) else { return }
+    @discardableResult
+    func launch(slug: String, prompt: String, screenshot: CapturedScreen? = nil, context: String? = nil) -> UUID? {
+        guard let agent = roster.agent(slug) else { return nil }
         if running.contains(slug) {
             queued[slug, default: []].append(prompt)
-            return
+            return nil
         }
         guard let cli = ClaudeCodeRun.locateCLI() else {
-            appendFailure(slug, prompt: prompt, error: "Claude Code isn't installed. Install it from claude.com/claude-code, then try again.")
-            return
+            appendFailure(slug, prompt: prompt, error: "Claude Code isn't installed yet. Install it, then try again.")
+            return nil
         }
 
         var turn = AgentTurn(prompt: prompt)
+        let turnID = turn.id
         turn.progress = []
         turns[slug, default: []].append(turn)
         running.insert(slug)
         snapshots[slug] = snapshot(agent.outputFolder)
         AgentCues.launched(agent)
 
-        var fullPrompt = prompt
+        var fullPrompt = context.map { "\($0)\n\nYour task: \(prompt)" } ?? prompt
         if let shot = screenshot, let path = saveScreenshot(shot, for: agent) {
             fullPrompt += "\n\n(The user's screen when they asked is saved at \(path). Look at it if it helps.)"
         }
@@ -96,6 +98,14 @@ final class AgentManager: ObservableObject {
         } catch {
             finish(slug, state: .failed, error: "Couldn't start Claude Code: \(error.localizedDescription)")
         }
+        return turnID
+    }
+
+    func delete(_ slug: String) {
+        stop(slug)
+        turns[slug] = nil
+        unread.remove(slug)
+        roster.delete(slug)
     }
 
     func stop(_ slug: String) {

@@ -82,7 +82,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("openaiVoice") var openaiVoice: String = "alloy"
     @AppStorage("systemVoiceID") var systemVoiceID: String = ""
     @AppStorage("cursorColorHex") var cursorColorHex: String = "#3B82F6"
-    @AppStorage("buddyName") var buddyName: String = "Buddy"
+    @AppStorage("buddyName") var buddyName: String = "Perch"
     @AppStorage("followCursor") var followCursor: Bool = true
 
     @Published var anthropicKey: String = Keychain.get("anthropic") {

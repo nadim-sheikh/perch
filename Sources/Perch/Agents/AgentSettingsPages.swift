@@ -55,6 +55,8 @@ struct AgentsSettingsPage: View {
         HStack {
             Button { HomeRouter.shared.showNewAgent = true } label: { Label("New helper", systemImage: "plus") }
                 .buttonStyle(ChipStyle())
+            Button { HomeRouter.shared.settings = nil; HomeRouter.shared.showNewGroup = true } label: { Label("New squad", systemImage: "person.3") }
+                .buttonStyle(ChipStyle())
             Button { NSWorkspace.shared.open(AgentPaths.agents) } label: { Label("Open helpers folder", systemImage: "folder") }
                 .buttonStyle(ChipStyle())
         }
@@ -97,6 +99,17 @@ private struct AgentSettingsRow: View {
                 }
                 .buttonStyle(IconButtonStyle())
                 .help(agent.archived ? "Unarchive" : "Archive")
+                Button {
+                    let alert = NSAlert()
+                    alert.messageText = "Delete \(agent.name)?"
+                    alert.informativeText = "Their folder and memory go to the Trash."
+                    alert.addButton(withTitle: "Delete")
+                    alert.addButton(withTitle: "Cancel")
+                    alert.window.level = .statusBar + 3
+                    if alert.runModal() == .alertFirstButtonReturn { AgentManager.shared.delete(agent.id) }
+                } label: { Image(systemName: "trash") }
+                .buttonStyle(IconButtonStyle())
+                .help("Delete")
             }
         }
     }
