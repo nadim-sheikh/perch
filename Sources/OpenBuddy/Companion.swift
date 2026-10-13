@@ -4,10 +4,12 @@ import AppKit
 /// model, show and speak the answer, and point at things it mentions.
 @MainActor
 final class Companion {
+    static let shared = Companion()
+
     private let state = BuddyState.shared
+    private let store = ConversationStore.shared
     private let speech = SpeechRecognizer()
     private let speaker = Speaker()
-    private var history: [ChatTurn] = []
     private var currentTask: Task<Void, Never>?
     private var hideBubbleWork: DispatchWorkItem?
 
@@ -62,13 +64,18 @@ final class Companion {
     }
 
     func resetConversation() {
-        history.removeAll()
+        store.newConversation()
     }
 
     private func ask(_ question: String) async {
         let settings = AppSettings.shared
         state.phase = .thinking
         state.bubbleText = ""
+        let conversationID = store.activeConversationID()
+        let history = store.history(for: conversationID)
+        store.append(Message(role: .user, text: question), to: conversationID)
+        store.streamingText = ""
+        defer { store.streamingText = nil }
 
         var screens: [CapturedScreen] = []
         if ScreenCapture.hasPermission() {
@@ -89,15 +96,17 @@ final class Companion {
                 full += chunk
                 state.phase = .responding
                 state.bubbleText = Pointing.stripTags(full)
+                store.streamingText = state.bubbleText
             }
         } catch {
-            if !Task.isCancelled { show(error: error.localizedDescription) }
+            if !Task.isCancelled {
+                show(error: error.localizedDescription)
+                store.append(Message(role: .error, text: error.localizedDescription), to: conversationID)
+            }
             return
         }
 
-        history.append(ChatTurn(role: .user, text: question))
-        history.append(ChatTurn(role: .assistant, text: full))
-        if history.count > 20 { history.removeFirst(history.count - 20) }
+        store.append(Message(role: .assistant, text: Pointing.stripTags(full)), to: conversationID)
 
         if let target = Pointing.firstTarget(in: full), let screen = screens.first(where: { $0.index == target.screen }) {
             state.point(at: screen.globalPoint(fromImagePoint: target.point), label: target.label)

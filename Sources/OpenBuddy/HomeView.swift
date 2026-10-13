@@ -1,0 +1,411 @@
+import AppKit
+import SwiftUI
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general = "General"
+    case ai = "AI Models"
+    case voice = "Voice"
+    case microphone = "Microphone"
+    case dictation = "Dictation"
+    case shortcuts = "Shortcuts"
+    case cursor = "Cursor"
+    case permissions = "Permissions"
+    case agents = "Agents"
+    case integrations = "Integrations"
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .general: return "gearshape.fill"
+        case .ai: return "sparkles"
+        case .voice: return "waveform"
+        case .microphone: return "mic.fill"
+        case .dictation: return "character.cursor.ibeam"
+        case .shortcuts: return "command"
+        case .cursor: return "cursorarrow"
+        case .permissions: return "lock.shield.fill"
+        case .agents: return "circle.grid.cross.fill"
+        case .integrations: return "puzzlepiece.extension.fill"
+        }
+    }
+
+    var group: String {
+        switch self {
+        case .general, .ai, .permissions: return ""
+        case .voice, .microphone, .dictation, .shortcuts, .cursor: return "OPENBUDDY"
+        case .agents, .integrations: return "WORK"
+        }
+    }
+}
+
+/// Which page the Home window shows.
+@MainActor
+final class HomeRouter: ObservableObject {
+    static let shared = HomeRouter()
+    @Published var settings: SettingsSection?
+    @Published var search = ""
+}
+
+struct HomeView: View {
+    @ObservedObject var router = HomeRouter.shared
+    @ObservedObject var store = ConversationStore.shared
+    var onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Group {
+                if let section = router.settings {
+                    SettingsSidebar(selection: section)
+                } else {
+                    HomeSidebar()
+                }
+            }
+            .frame(width: 222)
+            .background(Theme.sidebar)
+
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    if let section = router.settings {
+                        SettingsPage(section: section)
+                    } else if let c = store.selected {
+                        ConversationView(conversation: c)
+                    } else {
+                        HomeEmptyState()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(IconButtonStyle())
+                    .padding(14)
+            }
+            .background(Theme.window)
+        }
+        .frame(minWidth: 760, minHeight: 500)
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: Sidebar
+
+struct HomeSidebar: View {
+    @ObservedObject var router = HomeRouter.shared
+    @ObservedObject var store = ConversationStore.shared
+    @AppStorage("buddyName") private var buddyName = "Buddy"
+
+    var filtered: [Conversation] {
+        let q = router.search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return store.conversations }
+        return store.conversations.filter { $0.title.lowercased().contains(q) || $0.preview.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                LogoGlyph().frame(width: 22, height: 14)
+                Text("OpenBuddy").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                Spacer()
+            }
+            .padding(.top, 34)
+            .padding(.horizontal, 16)
+
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                    TextField("Search", text: $router.search).textFieldStyle(.plain).font(.system(size: 12))
+                }
+                .padding(.horizontal, 10).frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+
+                Button { store.newConversation() } label: { Image(systemName: "plus") }
+                    .buttonStyle(IconButtonStyle())
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                    .help("New chat")
+            }
+            .padding(.horizontal, 12)
+
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(filtered) { c in
+                        ConversationRow(conversation: c, selected: c.id == store.selectedID)
+                            .onTapGesture { store.selectedID = c.id }
+                            .contextMenu {
+                                Button("Delete", role: .destructive) { store.delete(c.id) }
+                            }
+                    }
+                }
+                .padding(.horizontal, 8)
+            }
+
+            Divider().overlay(Theme.cardStroke).padding(.horizontal, 12)
+
+            HStack(spacing: 10) {
+                MascotView(size: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(buddyName).font(.system(size: 12, weight: .semibold))
+                    Text("Free & open source").font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+                Button { NSWorkspace.shared.open(URL(string: "https://github.com/openbuddy/openbuddy")!) } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(IconButtonStyle())
+                Button { router.settings = .general } label: { Image(systemName: "gearshape.fill") }
+                    .buttonStyle(IconButtonStyle())
+            }
+            .padding(.horizontal, 14).padding(.bottom, 12)
+        }
+    }
+}
+
+struct ConversationRow: View {
+    let conversation: Conversation
+    let selected: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AvatarView(seed: conversation.id.uuidString, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(conversation.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Spacer()
+                    Text(conversation.updated.shortTime).font(.system(size: 10)).foregroundStyle(selected ? Color.black.opacity(0.55) : Theme.textSecondary)
+                }
+                Text(conversation.preview).font(.system(size: 11)).lineLimit(1)
+                    .foregroundStyle(selected ? Color.black.opacity(0.6) : Theme.textSecondary)
+            }
+        }
+        .foregroundStyle(selected ? Color.black : Theme.textPrimary)
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(selected ? AnyShapeStyle(Theme.userBubble) : AnyShapeStyle(hovering ? Theme.hover : .clear))
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Two-stroke wave mark used as the app logo.
+struct LogoGlyph: View {
+    var body: some View {
+        Canvas { ctx, size in
+            var p = Path()
+            p.move(to: CGPoint(x: 0, y: size.height * 0.4))
+            p.addLine(to: CGPoint(x: size.width * 0.25, y: size.height * 0.9))
+            p.addLine(to: CGPoint(x: size.width * 0.5, y: size.height * 0.2))
+            p.addLine(to: CGPoint(x: size.width * 0.75, y: size.height * 0.65))
+            p.addLine(to: CGPoint(x: size.width, y: size.height * 0.3))
+            ctx.stroke(p, with: .color(.white), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+        }
+    }
+}
+
+// MARK: Main area
+
+struct HomeEmptyState: View {
+    @AppStorage("buddyName") private var buddyName = "Buddy"
+
+    private var greeting: String {
+        let h = Calendar.current.component(.hour, from: Date())
+        let part = h < 12 ? "Morning" : h < 17 ? "Afternoon" : "Evening"
+        let first = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
+        return first.isEmpty ? "\(part)." : "\(part), \(first)."
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            ZStack(alignment: .top) {
+                TalkButton(title: "Hi, how can I help?")
+                    .padding(.top, 52)
+                MascotView(size: 78)
+            }
+            Text(greeting).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.textPrimary)
+            Text("Hold Control + Option and tell me what you need.")
+                .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            Spacer()
+            TypeField().frame(width: 320).padding(.bottom, 24)
+        }
+    }
+}
+
+struct ConversationView: View {
+    let conversation: Conversation
+    @ObservedObject var store = ConversationStore.shared
+    @AppStorage("buddyName") private var buddyName = "Buddy"
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 4) {
+                AvatarView(seed: conversation.id.uuidString, size: 30)
+                Text(conversation.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.card))
+            }
+            .padding(.top, 16).padding(.bottom, 8)
+            .frame(maxWidth: 360)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        MessageBubble(message: Message(role: .assistant,
+                            text: "Type below whenever you're ready, or hold Control and Option to just talk to me."), dimmed: true)
+                        ForEach(conversation.messages) { m in
+                            MessageBubble(message: m) {
+                                if let last = conversation.messages.last(where: { $0.role == .user }) {
+                                    Companion.shared.askTyped(last.text)
+                                }
+                            }
+                        }
+                        if let streaming = store.streamingText, store.selectedID == conversation.id {
+                            if streaming.isEmpty {
+                                TypingDots()
+                            } else {
+                                MessageBubble(message: Message(role: .assistant, text: streaming))
+                            }
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding(.horizontal, 28).padding(.vertical, 8)
+                }
+                .onChange(of: conversation.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
+                .onChange(of: store.streamingText) { _, _ in proxy.scrollTo("bottom") }
+                .onAppear { proxy.scrollTo("bottom") }
+            }
+
+            HStack(alignment: .bottom, spacing: 12) {
+                ZStack(alignment: .topLeading) {
+                    TalkButton(title: "Hold Control + Option to talk").padding(.top, 34)
+                    MascotView(tint: Color(red: 0.72, green: 0.64, blue: 0.95), size: 50).offset(x: -6)
+                }
+                TypeField().frame(width: 170)
+            }
+            .padding(.horizontal, 22).padding(.bottom, 8)
+            Text("Release to send")
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 30).padding(.bottom, 12)
+        }
+    }
+}
+
+struct MessageBubble: View {
+    let message: Message
+    var dimmed = false
+    var onRetry: (() -> Void)?
+
+    var body: some View {
+        switch message.role {
+        case .user:
+            HStack {
+                Spacer(minLength: 60)
+                Text(message.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color(red: 0.08, green: 0.1, blue: 0.2))
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 13).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.userBubble))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color(red: 0.2, green: 0.25, blue: 0.55), lineWidth: 1))
+            }
+        case .assistant:
+            HStack {
+                Text(message.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(dimmed ? Theme.textSecondary : Theme.textPrimary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 13).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.08)))
+                Spacer(minLength: 60)
+            }
+        case .error:
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("This attempt couldn't finish. Try again.", systemImage: "info.circle")
+                        .font(.system(size: 12)).foregroundStyle(Theme.textPrimary.opacity(0.85))
+                    DisclosureGroup("Technical details") {
+                        Text(message.text).font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
+                    }
+                    .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+
+                Text(message.date.shortTime).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                if let onRetry {
+                    Button(action: onRetry) { Label("Retry", systemImage: "arrow.clockwise") }
+                        .buttonStyle(ChipStyle(light: true))
+                }
+            }
+        }
+    }
+}
+
+struct TypingDots: View {
+    @State private var phase = 0.0
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3) { i in
+                Circle().fill(Theme.textSecondary).frame(width: 6, height: 6)
+                    .opacity(0.3 + 0.7 * max(0, sin(phase + Double(i) * 0.9)))
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.08)))
+        .onAppear { withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 } }
+    }
+}
+
+/// Press and hold to talk (same as holding Control + Option).
+struct TalkButton: View {
+    let title: String
+    @ObservedObject var state = BuddyState.shared
+    @State private var pressing = false
+
+    var body: some View {
+        Button {} label: {
+            Label(state.phase == .listening ? "Listening…" : title, systemImage: "mic.fill")
+                .frame(minWidth: 200)
+        }
+        .buttonStyle(GlassPillStyle(height: 34))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !pressing else { return }
+                    pressing = true
+                    Companion.shared.beginListening()
+                }
+                .onEnded { _ in
+                    pressing = false
+                    Companion.shared.endListening()
+                }
+        )
+    }
+}
+
+struct TypeField: View {
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "keyboard").font(.system(size: 12)).foregroundStyle(Theme.textTertiary)
+            TextField("Type…", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .onSubmit {
+                    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !t.isEmpty else { return }
+                    text = ""
+                    Companion.shared.askTyped(t)
+                }
+        }
+        .padding(.horizontal, 14).frame(height: 36)
+        .background(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
+    }
+}

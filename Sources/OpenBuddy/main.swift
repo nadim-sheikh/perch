@@ -5,9 +5,10 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let overlay = OverlayManager()
-    private let companion = Companion()
+    private let notch = NotchController()
+    private let companion = Companion.shared
     private let hotkey = PushToTalkMonitor()
-    private var settingsWindow: NSWindow?
+    private var homeWindow: NSWindow?
     private var askPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -15,16 +16,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.show()
         BuddyState.shared.startFollowingCursor()
 
+        NotchModel.shared.openHome = { [weak self] id in
+            if let id { ConversationStore.shared.selectedID = id }
+            HomeRouter.shared.settings = nil
+            self?.showHome()
+        }
+        NotchModel.shared.openSettings = { [weak self] in self?.openSettings() }
+        notch.show()
+
         hotkey.onPress = { [weak self] in self?.companion.beginListening() }
         hotkey.onRelease = { [weak self] in self?.companion.endListening() }
         hotkey.start()
+        AppAppearance.apply()
 
         Task {
             _ = await SpeechRecognizer.requestPermissions()
             if !ScreenCapture.hasPermission() { ScreenCapture.requestPermission() }
             _ = PushToTalkMonitor.hasAccessibility(prompt: true)
-            if AppSettings.shared.activeKey.isEmpty { openSettings() }
+            if AppSettings.shared.activeKey.isEmpty && !CommandLine.arguments.contains("--home") {
+                HomeRouter.shared.settings = .ai
+            }
+            showHome()
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showHome()
+        return true
     }
 
     private func setUpStatusItem() {
@@ -34,9 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Hold ⌃⌥ to talk", action: nil, keyEquivalent: "").isEnabled = false
         menu.addItem(.separator())
+        menu.addItem(item("Open Home", #selector(openHomeFromMenu), "h"))
         menu.addItem(item("Ask by typing…", #selector(showAskPanel), "k"))
         menu.addItem(item("Stop talking", #selector(stopTalking), "."))
-        menu.addItem(item("New conversation", #selector(newConversation), "n"))
+        menu.addItem(item("New chat", #selector(newConversation), "n"))
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(openSettings), ","))
         menu.addItem(item("Quit OpenBuddy", #selector(quit), "q"))
@@ -49,21 +68,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return i
     }
 
-    @objc func openSettings() {
-        if settingsWindow == nil {
+    func showHome() {
+        if homeWindow == nil {
             let w = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-                styleMask: [.titled, .closable],
+                contentRect: NSRect(x: 0, y: 0, width: 880, height: 560),
+                styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false
             )
-            w.title = "OpenBuddy Settings"
-            w.contentView = NSHostingView(rootView: SettingsView())
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isMovableByWindowBackground = true
+            w.standardWindowButton(.closeButton)?.isHidden = true
+            w.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            w.standardWindowButton(.zoomButton)?.isHidden = true
+            w.backgroundColor = NSColor(Theme.window)
+            w.appearance = NSAppearance(named: .darkAqua)
             w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: HomeView(onClose: { [weak w] in w?.orderOut(nil) }))
             w.center()
-            settingsWindow = w
+            homeWindow = w
+            AppAppearance.apply()
         }
         NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+        homeWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func openHomeFromMenu() {
+        HomeRouter.shared.settings = nil
+        showHome()
+    }
+
+    @objc func openSettings() {
+        HomeRouter.shared.settings = .general
+        showHome()
     }
 
     @objc func showAskPanel() {
@@ -77,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.titlebarAppearsTransparent = true
         panel.level = .floating
         panel.isReleasedWhenClosed = false
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.contentView = NSHostingView(rootView: AskField { [weak self, weak panel] text in
             panel?.close()
             self?.companion.askTyped(text)
