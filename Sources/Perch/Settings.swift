@@ -3,7 +3,7 @@ import Security
 import SwiftUI
 
 /// The model Perch uses for everything: talking, showing on screen, helpers and fixing text.
-/// It runs on the user's OpenRouter key and is switchable in Settings → AI Models.
+/// It runs on the current provider (see AIProvider) and is switchable in Settings → AI Models.
 enum PerchModel {
     struct Choice: Identifiable, Hashable {
         let id: String
@@ -11,19 +11,11 @@ enum PerchModel {
         let note: String
     }
 
-    /// Fast models that can see screenshots and use tools.
-    static let choices: [Choice] = [
-        Choice(id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash", note: "Fastest and cheapest (about 2.5s to speak)."),
-        Choice(id: "google/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite", note: "Light, but often slow to start (5s+)."),
-        Choice(id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash", note: "Smart, steady (about 4.5s)."),
-        Choice(id: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5", note: "Good at pointing (about 4s)."),
-        Choice(id: "openai/gpt-5.6-luna", name: "GPT-5.6 Luna", note: "Affordable (about 4.5s)."),
-    ]
-
-    static let defaultID = "z-ai/glm-5.3-flash"
+    static var choices: [Choice] { AIProvider.current.choices }
+    static var defaultID: String { AIProvider.current.defaultModel }
 
     static var id: String {
-        let saved = UserDefaults.standard.string(forKey: "perchModel")?.trimmingCharacters(in: .whitespaces) ?? ""
+        let saved = UserDefaults.standard.string(forKey: AIProvider.current.modelDefaultsKey)?.trimmingCharacters(in: .whitespaces) ?? ""
         return saved.isEmpty ? defaultID : saved
     }
 
@@ -50,13 +42,24 @@ enum PerchModel {
 
 enum VoiceEngine: String, CaseIterable, Identifiable {
     case kokoro
+    case elevenlabs
     case off
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .kokoro: return "Natural voice (on-device)"
+        case .elevenlabs: return "ElevenLabs (your key)"
         case .off: return "Don't speak"
         }
+    }
+
+    /// The voices this build offers. ElevenLabs uses its own key, so it's only in the standard build.
+    static var available: [VoiceEngine] {
+        #if PERCH_OPENROUTER
+        return [.kokoro, .off]
+        #else
+        return [.kokoro, .elevenlabs, .off]
+        #endif
     }
 }
 
@@ -99,6 +102,7 @@ final class AppSettings: ObservableObject {
 
     @AppStorage("voiceEngine") var voiceEngineRaw: String = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") var kokoroVoice: String = "af_heart"
+    @AppStorage("elevenlabsVoice") var elevenlabsVoice: String = ElevenLabs.voices[0].id
     @AppStorage("cursorColorHex") var cursorColorHex: String = "#3B82F6"
     @AppStorage("buddyName") var buddyName: String = "Perch"
     @AppStorage("followCursor") var followCursor: Bool = true
@@ -109,24 +113,49 @@ final class AppSettings: ObservableObject {
             let trimmed = openrouterKey.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed != openrouterKey { openrouterKey = trimmed }
             Keychain.set(openrouterKey, for: "openrouter")
-            if openrouterKey != oldValue { Task { @MainActor in OpenRouterKeyCheck.shared.reset() } }
+            if openrouterKey != oldValue { Task { @MainActor in KeyCheck.shared.reset() } }
         }
     }
 
+    @Published var anthropicKey: String = Keychain.get("anthropic") { didSet { store(&anthropicKey, oldValue, "anthropic") } }
+    @Published var openaiKey: String = Keychain.get("openai") { didSet { store(&openaiKey, oldValue, "openai") } }
+    @Published var xaiKey: String = Keychain.get("xai") { didSet { store(&xaiKey, oldValue, "xai") } }
+    @Published var elevenlabsKey: String = Keychain.get("elevenlabs") { didSet { store(&elevenlabsKey, oldValue, "elevenlabs") } }
+
+    /// Trims a pasted key, saves it, and re-checks it if it changed.
+    private func store(_ value: inout String, _ old: String, _ account: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed != value { value = trimmed }
+        Keychain.set(trimmed, for: account)
+        if trimmed != old { Task { @MainActor in KeyCheck.shared.reset() } }
+    }
+
+    func key(for provider: AIProvider) -> String {
+        switch provider {
+        case .openrouter: return openrouterKey
+        case .anthropic: return anthropicKey
+        case .openai: return openaiKey
+        case .xai: return xaiKey
+        }
+    }
+
+    /// The key for the provider Perch uses now.
+    var activeKey: String { key(for: AIProvider.current) }
+
     var voiceEngine: VoiceEngine {
-        get { VoiceEngine(rawValue: voiceEngineRaw) ?? .kokoro }
+        get { VoiceEngine(rawValue: voiceEngineRaw).flatMap { VoiceEngine.available.contains($0) ? $0 : nil } ?? .kokoro }
         set { voiceEngineRaw = newValue.rawValue }
     }
 
     var cursorColor: Color { Color(hex: cursorColorHex) ?? .blue }
 
-    var hasKey: Bool { !openrouterKey.isEmpty }
+    var hasKey: Bool { !activeKey.isEmpty }
 }
 
-/// Asks OpenRouter whether the saved key works, so Settings can say so honestly.
+/// Asks the current provider whether the saved key works, so Settings can say so honestly.
 @MainActor
-final class OpenRouterKeyCheck: ObservableObject {
-    static let shared = OpenRouterKeyCheck()
+final class KeyCheck: ObservableObject {
+    static let shared = KeyCheck()
 
     enum State: Equatable { case unchecked, checking, valid, invalid, unreachable(String) }
 
@@ -139,13 +168,13 @@ final class OpenRouterKeyCheck: ObservableObject {
     }
 
     func check() {
-        let key = AppSettings.shared.openrouterKey
+        let provider = AIProvider.current
+        let key = AppSettings.shared.key(for: provider)
         generation += 1
         let gen = generation
-        guard !key.isEmpty, let url = URL(string: "https://openrouter.ai/api/v1/key") else { state = .unchecked; return }
+        guard !key.isEmpty else { state = .unchecked; return }
         state = .checking
-        var req = URLRequest(url: url, timeoutInterval: 15)
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        let req = provider.keyCheckRequest(key: key)
         Task {
             let result: State
             do {
@@ -154,7 +183,7 @@ final class OpenRouterKeyCheck: ObservableObject {
                 switch code {
                 case 200..<300: result = .valid
                 case 401, 403: result = .invalid
-                default: result = .unreachable("OpenRouter answered HTTP \(code).")
+                default: result = .unreachable("\(provider.title) answered HTTP \(code).")
                 }
             } catch {
                 result = .unreachable(error.localizedDescription)

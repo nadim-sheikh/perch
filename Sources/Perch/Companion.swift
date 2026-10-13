@@ -170,7 +170,7 @@ final class Companion {
         var full = ""
         var visible = ""
         // Speak sentence by sentence while the answer is still arriving.
-        let speakLive = !inNotch && settings.voiceEngine == .kokoro
+        let speakLive = !inNotch && settings.voiceEngine != .off
         var spokenUpTo = 0
         if speakLive { speaker.beginLive() }
         func flushSpeech(final: Bool) {
@@ -519,13 +519,14 @@ enum AgentTrigger {
 
 
 
-/// Opens the connection to OpenRouter while the user is still talking, so the real request
+/// Opens the connection to the AI provider while the user is still talking, so the real request
 /// doesn't pay for DNS and TLS setup.
 enum Warmup {
-    private static var last = Date.distantPast
-    static func connection() {
-        guard Date().timeIntervalSince(last) > 20, let url = URL(string: "https://openrouter.ai/api/v1/models?limit=1") else { return }
-        last = Date()
+    private static var last: [String: Date] = [:]
+    static func connection(_ endpoint: URL = AIProvider.current.chatURL) {
+        guard let host = endpoint.host, Date().timeIntervalSince(last[host] ?? .distantPast) > 20,
+              let url = URL(string: "https://\(host)/") else { return }
+        last[host] = Date()
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         req.timeoutInterval = 4

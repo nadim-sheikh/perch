@@ -5,8 +5,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release --arch arm64 --arch x86_64
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/Perch"
+# The standard build uses Anthropic, OpenAI or xAI keys. With PERCH_OPENROUTER=1, or a `.perch-local`
+# file next to this script (git-ignored), Perch is built to use OpenRouter instead.
+FLAGS=(-c release --arch arm64 --arch x86_64)
+# PERCH_OPENROUTER=0 forces the standard build even when .perch-local exists.
+if [[ "${PERCH_OPENROUTER:-}" == "1" || ( -f .perch-local && "${PERCH_OPENROUTER:-}" != "0" ) ]]; then
+  FLAGS+=(-Xswiftc -DPERCH_OPENROUTER)
+  echo "Building the OpenRouter edition."
+fi
+swift build "${FLAGS[@]}"
+BIN="$(swift build "${FLAGS[@]}" --show-bin-path)/Perch"
 
 OUT_DIR="${OUT_DIR:-$HOME/Applications}"
 mkdir -p "$OUT_DIR"

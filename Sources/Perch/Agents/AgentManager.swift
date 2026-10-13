@@ -120,7 +120,7 @@ final class AgentManager: ObservableObject {
         }
         let turnID = ask.turnID
         let run = AgentRun(agent: agent, turnID: turnID, prompt: fullPrompt, screenshot: ask.screenshot, replacing: ask.replacing,
-                           model: PerchModel.id, apiKey: AppSettings.shared.openrouterKey,
+                           model: PerchModel.id, apiKey: AppSettings.shared.activeKey,
                            systemPrompt: AgentPrompt.system(for: agent)) { [weak self] event in
             self?.handle(event, slug: slug, turnID: turnID)
         }
@@ -356,7 +356,7 @@ final class AgentManager: ObservableObject {
     }
 }
 
-/// Agent-wide settings. Helpers run on Perch's one model with the user's OpenRouter key.
+/// Agent-wide settings. Helpers run on Perch's one model with the user's key.
 enum AgentSettings {
     /// Environment for commands and local app servers: the user's environment plus a usable PATH.
     static func environment() -> [String: String] {

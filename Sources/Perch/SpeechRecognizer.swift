@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import FluidAudio
 import Speech
 
@@ -8,16 +9,57 @@ enum SpeechEngine: String, CaseIterable, Identifiable {
     var title: String { self == .parakeet ? "Parakeet (on-device)" : "ElevenLabs Scribe" }
 }
 
-/// ElevenLabs Scribe through OpenRouter's transcription endpoint, using the same OpenRouter key.
+/// ElevenLabs Scribe v2. The standard build calls ElevenLabs with the user's ElevenLabs key; an
+/// OpenRouter build goes through OpenRouter's transcription endpoint with the OpenRouter key.
 enum CloudTranscriber {
     static let model = "elevenlabs/scribe-v2"
 
+    static var hasKey: Bool {
+        #if PERCH_OPENROUTER
+        return !AppSettings.shared.openrouterKey.isEmpty
+        #else
+        return !AppSettings.shared.elevenlabsKey.isEmpty
+        #endif
+    }
+
+    static var host: URL {
+        #if PERCH_OPENROUTER
+        return AIProvider.openrouter.chatURL
+        #else
+        return URL(string: "https://api.elevenlabs.io/v1/speech-to-text")!
+        #endif
+    }
+
+    static var settingsNote: String {
+        #if PERCH_OPENROUTER
+        return "ElevenLabs Scribe v2 through your OpenRouter key. Most accurate, about $0.11 per hour of talking."
+        #else
+        return hasKey ? "ElevenLabs Scribe v2 with your ElevenLabs key. Most accurate."
+                      : "ElevenLabs Scribe v2. Add your ElevenLabs key in Settings → Voice first."
+        #endif
+    }
+
     /// Returns nil on any failure so the caller can fall back to on-device speech.
     static func transcribe(_ samples: [Float]) async -> String? {
-        let key = await AppSettings.shared.openrouterKey
         let samples = trimSilence(samples)
-        guard !key.isEmpty, samples.count > 8_000 else { return nil }
+        guard samples.count > 8_000 else { return nil }
         let started = Date()
+        let text = await send(samples)
+        if text != nil {
+            DebugLog.write(String(format: "scribe: %.1fs of speech, text back in %.2fs",
+                                  Double(samples.count) / 16_000, Date().timeIntervalSince(started)))
+        }
+        return text
+    }
+
+    #if !PERCH_OPENROUTER
+    private static func send(_ samples: [Float]) async -> String? {
+        await ElevenLabs.transcribe(wav: wav(samples))
+    }
+    #else
+    private static func send(_ samples: [Float]) async -> String? {
+        let key = await AppSettings.shared.openrouterKey
+        guard !key.isEmpty else { return nil }
         var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/audio/transcriptions")!, timeoutInterval: 15)
         req.httpMethod = "POST"
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -37,14 +79,13 @@ enum CloudTranscriber {
                 DebugLog.write("scribe: HTTP \(status) \(String(data: data.prefix(200), encoding: .utf8) ?? "")")
                 return nil
             }
-            DebugLog.write(String(format: "scribe: %.1fs of speech, text back in %.2fs",
-                                  Double(samples.count) / 16_000, Date().timeIntervalSince(started)))
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             DebugLog.write("scribe: \(error.localizedDescription)")
             return nil
         }
     }
+    #endif
 
     /// Drops the quiet before and after speaking (keeping a short pad): less to upload and transcribe.
     private static func trimSilence(_ samples: [Float]) -> [Float] {
@@ -76,6 +117,52 @@ enum CloudTranscriber {
         d.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count))
         d.append(pcm)
         return d
+    }
+}
+
+/// The microphone Perch listens with: the one picked in Settings → Microphone, or the system default.
+enum MicrophoneChoice {
+    static let defaultsKey = "micDeviceUID"
+
+    struct Device: Identifiable, Hashable { let id: String; let name: String }
+
+    static var devices: [Device] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified)
+            .devices.map { Device(id: $0.uniqueID, name: $0.localizedName) }
+    }
+
+    static var systemDefaultName: String { AVCaptureDevice.default(for: .audio)?.localizedName ?? "None" }
+
+    /// Points the engine's input at the chosen microphone, or back at the system default when none is
+    /// chosen or the chosen one is unplugged. Call while the engine is stopped.
+    static func apply(to engine: AVAudioEngine) {
+        let uid = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        guard var device = (uid.isEmpty ? nil : deviceID(uid: uid)) ?? defaultInput(),
+              let unit = engine.inputNode.audioUnit else { return }
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                             &device, UInt32(MemoryLayout<AudioDeviceID>.size))
+    }
+
+    private static func deviceID(uid: String) -> AudioDeviceID? {
+        var cfUID: CFString = uid as CFString
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        let status = withUnsafeMutablePointer(to: &cfUID) {
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                                       UInt32(MemoryLayout<CFString>.size), $0, &size, &id)
+        }
+        return status == noErr && id != 0 ? id : nil
+    }
+
+    private static func defaultInput() -> AudioDeviceID? {
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
+        return status == noErr && id != 0 ? id : nil
     }
 }
 
@@ -168,10 +255,11 @@ final class SpeechRecognizer {
         cancel()
         let gen = generation
         let parakeetReady = await Parakeet.shared.isReady
-        usingScribe = Self.preferredEngine == .scribe && AppSettings.shared.hasKey
+        usingScribe = Self.preferredEngine == .scribe && CloudTranscriber.hasKey
         usingParakeet = usingScribe || (Self.preferredEngine == .parakeet && parakeetReady)
-        if usingScribe { Warmup.connection() }  // the upload then reuses an open connection
+        if usingScribe { Warmup.connection(CloudTranscriber.host) }  // the upload then reuses an open connection
         guard gen == generation else { throw CancellationError() }
+        MicrophoneChoice.apply(to: engine)
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)

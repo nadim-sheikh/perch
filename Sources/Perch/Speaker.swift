@@ -32,7 +32,7 @@ actor Kokoro {
     }
 }
 
-/// Speaks replies with the local Kokoro voice, either all at once or live while a reply streams.
+/// Speaks replies with the local Kokoro voice or ElevenLabs, either all at once or live while a reply streams.
 @MainActor
 final class Speaker: NSObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
@@ -47,8 +47,8 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         switch settings.voiceEngine {
         case .off:
             return
-        case .kokoro:
-            await speakKokoro(clean, voice: settings.kokoroVoice)
+        case .kokoro, .elevenlabs:
+            await speakPhrases(clean)
         }
     }
 
@@ -62,18 +62,27 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         resume()
     }
 
+    /// Audio for one phrase in the chosen voice: Kokoro on this Mac, or ElevenLabs with the user's key.
+    private static func render(_ phrase: String) async -> Data? {
+        let settings = AppSettings.shared
+        let speed = UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1.0
+        if settings.voiceEngine == .elevenlabs {
+            return await ElevenLabs.speech(phrase, voice: settings.elevenlabsVoice, speed: speed)
+        }
+        return try? await Kokoro.shared.synthesize(phrase, voice: settings.kokoroVoice, speed: Float(speed))
+    }
+
     /// Speaks sentence by sentence: the next one renders while the current one plays.
-    private func speakKokoro(_ text: String, voice: String) async {
+    private func speakPhrases(_ text: String) async {
         let sentences = Self.phrases(Self.speakable(text))
         guard !sentences.isEmpty else { return }
         generation += 1
         let gen = generation
-        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1.0)
-        var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice, speed: speed) }
+        var next: Task<Data?, Never>? = Task { await Self.render(sentences[0]) }
         for i in sentences.indices {
             guard let data = await next?.value, gen == generation else { return }
             next = i + 1 < sentences.count
-                ? Task { [s = sentences[i + 1]] in try? await Kokoro.shared.synthesize(s, voice: voice, speed: speed) } : nil
+                ? Task { [s = sentences[i + 1]] in await Self.render(s) } : nil
             guard let player = try? AVAudioPlayer(data: data) else { return }
             self.player = player
             player.delegate = self
@@ -116,8 +125,6 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         liveQueue = []
         liveFinished = false
         let gen = generation
-        let voice = AppSettings.shared.kokoroVoice
-        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1.0)
         liveTask = Task { [weak self] in
             var prefetched: (String, Task<Data?, Never>)?
             while let self, gen == self.generation {
@@ -129,12 +136,12 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
                 let current: (String, Task<Data?, Never>)
                 if let p = prefetched { current = p; prefetched = nil } else {
                     let phrase = self.liveQueue.removeFirst()
-                    current = (phrase, Task { try? await Kokoro.shared.synthesize(phrase, voice: voice, speed: speed) })
+                    current = (phrase, Task { await Self.render(phrase) })
                 }
                 // Render the next phrase while this one plays.
                 if !self.liveQueue.isEmpty {
                     let next = self.liveQueue.removeFirst()
-                    prefetched = (next, Task { try? await Kokoro.shared.synthesize(next, voice: voice, speed: speed) })
+                    prefetched = (next, Task { await Self.render(next) })
                 }
                 guard let data = await current.1.value, gen == self.generation, let player = try? AVAudioPlayer(data: data) else { continue }
                 self.player = player
@@ -150,7 +157,7 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
     }
 
     func enqueueLive(_ text: String) {
-        guard AppSettings.shared.voiceEngine == .kokoro else { return }
+        guard AppSettings.shared.voiceEngine != .off else { return }
         // Each flush is already a smooth-sized chunk of whole sentences.
         let clean = Self.speakable(text)
         if !clean.isEmpty { liveQueue.append(clean) }

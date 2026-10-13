@@ -235,7 +235,10 @@ struct HomeSidebar: View {
                 MascotView(size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(buddyName).font(.system(size: 12, weight: .semibold))
-                    Text("Free & open source").font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                    Link(destination: Credits.twitter) {
+                        Text("by \(Credits.developer)").font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                    }
+                    .help("\(Credits.developer) on X: \(Credits.handle)")
                 }
                 Spacer()
                 Button { router.settings = .general } label: { Image(systemName: "gearshape.fill") }
@@ -361,7 +364,7 @@ struct HomeEmptyState: View {
                 Text(tagline)
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
             } else {
-                Text("Add your OpenRouter key first, so I can think.")
+                Text("Add your \(AIProvider.current.title) key first, so I can think.")
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
                 Button { HomeRouter.shared.settings = .ai } label: { Label("Add key", systemImage: "key.fill") }
                     .buttonStyle(GlassPillStyle(height: 28))

@@ -5,80 +5,80 @@
 <p align="center">A free, open-source AI buddy that lives in your Mac's notch.<br>
 It sees your screen, listens when you hold a key, talks back, points at things, and hands real work to helper agents.</p>
 
-<p align="center"><img src="docs/demo/notch-demo.gif" width="640" alt="The notch going from resting to listening, thinking and answering"></p>
+<p align="center">
+  <a href="https://github.com/nadim-sheikh/perch/releases/latest"><b>⬇️ Download for Mac</b></a> ·
+  <a href="docs/demo/perch-demo.mp4">Watch the demo video</a> ·
+  Made by <a href="https://x.com/Nadim_404">Nadim Sheikh</a>
+</p>
 
-Bring your own [OpenRouter](https://openrouter.ai) key. No account, no paywall, no telemetry.
+<p align="center"><img src="docs/demo/perch-demo.gif" width="860" alt="Perch demo: guide mode marks the screen, a helper agent builds a web page, and dictation with spelling fixes"></p>
 
-## Demo
-
-**Guide mode.** Ask "how do I…" or "help me…" and Perch answers out loud, marks the exact button on your screen and points at it with its cursor.
-
-<img src="docs/demo/guide-marks.png" width="760" alt="Perch marking the File menu with its cursor and a speech bubble">
-
-**Answers in the notch.** Type or talk, and the reply drops down from the notch.
-
-<img src="docs/demo/notch-answer.png" width="640" alt="An answer card dropping down from the notch">
-
-**Settings.**
-
-| Voice | Microphone |
-|---|---|
-| <img src="docs/demo/settings-voice.png" alt="Voice settings"> | <img src="docs/demo/settings-microphone.png" alt="Microphone settings"> |
-| **Shortcuts** | **General** |
-| <img src="docs/demo/settings-shortcuts.png" alt="Shortcut settings"> | <img src="docs/demo/settings-general.png" alt="General settings"> |
-
-The demo images are rendered from the app's real views with sample text: `Perch --demo-shots docs/demo`.
+Bring your own key from **Anthropic, OpenAI or xAI (Grok)**. Optional **ElevenLabs** key for cloud voice. No account, no paywall, no telemetry.
 
 ## What it does
 
-- **Talk or type.** Hold Control + Option to talk, or double-tap Control to type in the notch.
-- **Guide or do.** "Help me make a poster" gets step-by-step guidance with on-screen marks. "Make a poster" hands the job to a helper agent that does it. Saying "agent" first always hands it over.
-- **Helper agents.** Background agents that use your Mac (open apps, click, type), the web, files and connected apps. Create your own, or group them into squads.
-- **Speech to text.** NVIDIA Parakeet on-device (free, offline) or ElevenLabs Scribe v2 through your OpenRouter key (most accurate).
-- **Natural voice.** Kokoro, running privately on your Mac.
-- **Dictation.** Hold Control + Shift in any text box and your words are typed where the cursor is.
-- **Fix spelling.** Select text anywhere and press Option + Shift + U.
-- **Model switcher.** Pick any OpenRouter model; fast ones are suggested.
-- **Multi-monitor aware.** The notch follows your screen layout; non-notch screens get a small mascot pill.
+- **Talk or type.** Hold <kbd>Control</kbd> + <kbd>Option</kbd> to talk, or double-tap <kbd>Control</kbd> to type in the notch.
+- **Guide mode.** Ask "how do I…" or "help me…" and Perch answers out loud, marks the exact button on your screen and points at it with its cursor.
+- **Agent mode.** Ask for something ("make a landing page for my bakery") and a helper agent does the work in the background: it uses your Mac (opens apps, clicks, types), the web and files, and shows its progress in the notch.
+- **Your own helpers.** Create helpers with their own role, or group them into squads.
+- **Dictation.** Hold <kbd>Control</kbd> + <kbd>Shift</kbd> in any text box and your words are typed where the cursor is.
+- **Fix spelling.** Select text anywhere and press <kbd>Option</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd>.
+- **Voice in and out.**
+  - Speech to text: **NVIDIA Parakeet** on your Mac (free, offline) or **ElevenLabs Scribe** with your ElevenLabs key.
+  - Voice: **Kokoro** on your Mac (free, private) or **ElevenLabs** voices with your key.
+- **Pick your model.** Fast defaults for each provider, or type any model id.
+- **Multi-monitor aware.** The notch follows your screen layout; screens without a notch get a small mascot pill.
+- **Connections** to Gmail, GitHub, Notion, Slack and more: coming soon.
 
 ## Install
 
-Requires macOS 14 or later and Xcode 15.3+ (Swift 5.10).
+**Download:** grab `Perch-x.y.z.dmg` from [Releases](https://github.com/nadim-sheikh/perch/releases/latest), open it and drag Perch to Applications.
+
+Perch isn't notarized by Apple (that needs a paid developer account), so the first time:
+right-click Perch in Applications → **Open** → **Open**. Or open it once, then go to
+System Settings → Privacy & Security and click **Open Anyway**.
+
+**Build from source** (macOS 14+, Xcode 15.3+):
 
 ```bash
 git clone https://github.com/nadim-sheikh/perch.git
 cd perch
-./build.sh
+./build.sh        # installs to ~/Applications/Perch.app
+./make-dmg.sh     # or: package dist/Perch-<version>.dmg
 ```
 
-The app is installed to `~/Applications/Perch.app`. Then:
+## Set up
 
 1. Open Perch. The mascot appears in the notch.
-2. In **Settings → AI Models**, paste your OpenRouter key. It's stored in your Keychain.
-3. Allow Microphone, Screen Recording and Accessibility when asked, then quit and reopen Perch once.
-4. Hold **Control + Option** and talk.
+2. **Settings → AI Models:** choose Anthropic, OpenAI or xAI and paste your key. Keys are stored in your Keychain.
+   - [Anthropic key](https://platform.claude.com/settings/keys) · [OpenAI key](https://platform.openai.com/api-keys) · [xAI key](https://console.x.ai)
+3. Optional, **Settings → Voice:** pick ElevenLabs and paste your [ElevenLabs key](https://elevenlabs.io/app/settings/api-keys). Otherwise everything voice-related runs on your Mac.
+4. Allow Microphone, Screen Recording and Accessibility when asked, then quit and reopen Perch once.
+5. Hold **Control + Option** and talk.
 
-`build.sh` signs with a local certificate named "Perch Developer" when you have one, so macOS keeps Perch's permissions between builds. Without it the app is signed ad hoc and permissions reset on each build.
+## Privacy
+
+- Your keys, chats and helpers stay on your Mac.
+- Screenshots and questions go only to the AI provider you picked, and only when you ask something.
+- Parakeet and Kokoro run entirely on-device. ElevenLabs is used only if you choose it.
 
 ## Project layout
 
 ```
 Sources/Perch/            the app
-  Agents/                 helper agents, tools, connectors (MCP), squads
-  Operator/               Mac control, dictation, fix-spelling, quick commands
+  Agents/                 helper agents, their tools, squads
+  Operator/               Mac control, dictation, fix spelling, quick commands
+  AIProvider.swift        Anthropic / OpenAI / xAI requests, ElevenLabs voice
 Resources/                Info.plist, entitlements, app icon
 Tools/make-icon.swift     generates the app icon
-docs/demo/                README images (rendered by --demo-shots)
-docs/qa/                  QA notes
-build.sh                  build, sign and install
+docs/demo/                the demo GIF and video (Perch --demo-video docs/demo renders the video)
+build.sh, make-dmg.sh     build, sign, install and package
 ```
 
-## Privacy
+## Credits
 
-- Your key, chats and helpers stay on your Mac.
-- Screenshots and questions go only to the model you picked on OpenRouter, and only when you ask something.
-- Parakeet speech recognition and the Kokoro voice run entirely on-device. Scribe sends your recording to OpenRouter.
+Made by **Nadim Sheikh**: [@Nadim_404 on X](https://x.com/Nadim_404).
 
-## Legal
+Speech recognition and on-device voice use [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache 2.0) with NVIDIA Parakeet and Kokoro models.
 
 Perch is an original open-source project. MIT licensed, see [LICENSE](LICENSE).

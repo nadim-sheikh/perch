@@ -9,9 +9,9 @@ struct AgentsSettingsPage: View {
 
     var body: some View {
         SettingsGroup(title: "Engine") {
-            SettingsRow(title: "OpenRouter", subtitle: settings.openrouterKey.isEmpty
-                        ? "Helpers run on your OpenRouter key. Add it in AI Models first."
-                        : "Helpers run on your OpenRouter key.") {
+            SettingsRow(title: AIProvider.current.title, subtitle: !settings.hasKey
+                        ? "Helpers run on your \(AIProvider.current.title) key. Add it in AI Models first."
+                        : "Helpers run on your \(AIProvider.current.title) key.") {
                 KeyStatusLabel()
             }
             SettingsRow(title: "Model", subtitle: "Every helper, and the buddy, use the same model.", last: true) {
@@ -80,6 +80,20 @@ private struct AgentSettingsRow: View {
 
 // MARK: Integrations
 
+/// Shown instead of the integrations catalog in the standard build until connections ship there.
+private struct ComingSoonCard: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            MascotView(size: 64, happy: true)
+            Text("Coming soon").font(.system(size: 17, weight: .bold))
+            Text("Connect Gmail, GitHub, Notion, Slack and more so helpers can work in your apps.\nIt's on the way.")
+                .font(.system(size: 12)).foregroundStyle(Theme.textSecondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 40)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.card))
+    }
+}
+
 struct IntegrationsSettingsPage: View {
     @ObservedObject var store = ConnectorStore.shared
     @State private var search = ""
@@ -100,6 +114,14 @@ struct IntegrationsSettingsPage: View {
     }
 
     var body: some View {
+        #if PERCH_OPENROUTER
+        catalogView
+        #else
+        ComingSoonCard()
+        #endif
+    }
+
+    @ViewBuilder private var catalogView: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             TextField("Search integrations", text: $search).textFieldStyle(.plain).font(.system(size: 12))

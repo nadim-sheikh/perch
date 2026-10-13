@@ -34,9 +34,14 @@ struct SettingsSidebar: View {
                 }
                 .padding(.horizontal, 8)
             }
-            Text("Perch \(Bundle.main.shortVersion)")
-                .font(.system(size: 10)).foregroundStyle(Theme.textTertiary)
-                .padding(14)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Perch \(Bundle.main.shortVersion) · Free & open source")
+                    .font(.system(size: 10)).foregroundStyle(Theme.textTertiary)
+                Link(destination: Credits.twitter) {
+                    Text("Made by \(Credits.developer) · \(Credits.handle)").font(.system(size: 10, weight: .medium))
+                }
+            }
+            .padding(14)
         }
     }
 
@@ -235,33 +240,67 @@ private struct GeneralPage: View {
 
 private struct AIPage: View {
     @ObservedObject var settings = AppSettings.shared
-    @AppStorage("perchModel") private var model = PerchModel.defaultID
+    @AppStorage("aiProvider") private var providerRaw = AIProvider.available[0].rawValue
+    @State private var model = PerchModel.id
     @State private var custom = ""
     @State private var speed: [String: String] = [:]
     @State private var testing: String?
 
-    private var isCustom: Bool { !PerchModel.choices.contains { $0.id == model } }
+    private var provider: AIProvider { AIProvider.current }
+    private var isCustom: Bool { !provider.choices.contains { $0.id == model } }
+
+    /// The key field for the provider shown.
+    private var keyBinding: Binding<String> {
+        switch provider {
+        case .openrouter: return $settings.openrouterKey
+        case .anthropic: return $settings.anthropicKey
+        case .openai: return $settings.openaiKey
+        case .xai: return $settings.xaiKey
+        }
+    }
+
+    private func choose(_ id: String) {
+        model = id
+        UserDefaults.standard.set(id, forKey: provider.modelDefaultsKey)
+    }
 
     var body: some View {
+        if AIProvider.available.count > 1 {
+            SettingsGroup(title: "Provider") {
+                SettingsRow(title: "AI provider", subtitle: "Bring your own key. Perch talks to the provider directly.", last: true) {
+                    Picker("", selection: $providerRaw) {
+                        ForEach(AIProvider.available) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().frame(width: 170)
+                }
+            }
+            .onChange(of: providerRaw) { _, _ in
+                model = PerchModel.id
+                custom = isCustom ? model : ""
+                speed = [:]
+                KeyCheck.shared.reset()
+            }
+        }
+
         SettingsGroup(title: "Model") {
-            ForEach(PerchModel.choices) { c in
+            ForEach(provider.choices) { c in
                 SettingsRow(title: c.name, subtitle: speed[c.id].map { "\(c.note) · \($0)" } ?? c.note) {
                     HStack(spacing: 8) {
                         Button(testing == c.id ? "Testing…" : "Test speed") { test(c.id) }
                             .buttonStyle(ChipStyle())
-                            .disabled(testing != nil || settings.openrouterKey.isEmpty)
+                            .disabled(testing != nil || !settings.hasKey)
                         Image(systemName: model == c.id ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 16))
                             .foregroundStyle(model == c.id ? Theme.accent : Theme.textTertiary)
                     }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { model = c.id }
+                .onTapGesture { choose(c.id) }
             }
-            SettingsRow(title: "Custom", subtitle: "Any OpenRouter model id that can see images.", last: true) {
+            SettingsRow(title: "Custom", subtitle: "Any \(provider.title) model id that can see images.", last: true) {
                 HStack(spacing: 8) {
-                    TextField("provider/model", text: $custom).settingsField()
-                        .onSubmit { if !custom.trimmingCharacters(in: .whitespaces).isEmpty { model = custom.trimmingCharacters(in: .whitespaces) } }
+                    TextField(provider == .openrouter ? "provider/model" : "model id", text: $custom).settingsField()
+                        .onSubmit { if !custom.trimmingCharacters(in: .whitespaces).isEmpty { choose(custom.trimmingCharacters(in: .whitespaces)) } }
                     Image(systemName: isCustom ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 16))
                         .foregroundStyle(isCustom ? Theme.accent : Theme.textTertiary)
@@ -273,19 +312,19 @@ private struct AIPage: View {
             .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
 
         SettingsGroup(title: "API key") {
-            SettingsRow(title: "OpenRouter", subtitle: nil) {
-                SecureField("sk-or-…", text: $settings.openrouterKey).settingsField()
+            SettingsRow(title: provider.title, subtitle: nil) {
+                SecureField(provider.keyPlaceholder, text: keyBinding).settingsField()
             }
             SettingsRow(title: "Status", subtitle: nil, last: true) {
                 HStack(spacing: 8) {
                     KeyStatusLabel()
-                    Button("Check key") { OpenRouterKeyCheck.shared.check() }
+                    Button("Check key") { KeyCheck.shared.check() }
                         .buttonStyle(ChipStyle(light: true))
-                        .disabled(settings.openrouterKey.isEmpty)
+                        .disabled(!settings.hasKey)
                 }
             }
         }
-        Link("Get a key at openrouter.ai/keys", destination: URL(string: "https://openrouter.ai/keys")!)
+        Link("Get a \(provider.title) key", destination: provider.keysPage)
             .font(.system(size: 11))
     }
 
@@ -314,14 +353,14 @@ private struct AIPage: View {
     }
 }
 
-/// The OpenRouter key's real state. Checks it once when first shown.
+/// The current provider key's real state. Checks it once when first shown.
 struct KeyStatusLabel: View {
     @ObservedObject var settings = AppSettings.shared
-    @ObservedObject var check = OpenRouterKeyCheck.shared
+    @ObservedObject var check = KeyCheck.shared
 
     var body: some View {
         Group {
-            if settings.openrouterKey.isEmpty {
+            if !settings.hasKey {
                 Label("No key", systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
             } else {
                 switch check.state {
@@ -334,22 +373,24 @@ struct KeyStatusLabel: View {
             }
         }
         .font(.system(size: 12))
-        .onAppear { if !settings.openrouterKey.isEmpty, check.state == .unchecked { check.check() } }
+        .onAppear { if settings.hasKey, check.state == .unchecked { check.check() } }
     }
 }
 
 private struct VoicePage: View {
     @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
+    @AppStorage("elevenlabsVoice") private var elevenlabsVoice = ElevenLabs.voices[0].id
     @AppStorage("voiceSpeed") private var voiceSpeed = 1.0
+    @ObservedObject private var settings = AppSettings.shared
     @State private var previewing = false
     /// Its own speaker, so the button can wait for the preview to finish.
     @MainActor private static let previewSpeaker = Speaker()
 
     var body: some View {
         SettingsGroup(title: "Speaking") {
-            ForEach(VoiceEngine.allCases) { e in
-                SettingsRow(title: e.displayName, last: e == VoiceEngine.allCases.last) {
+            ForEach(VoiceEngine.available) { e in
+                SettingsRow(title: e.displayName, last: e == VoiceEngine.available.last) {
                     Image(systemName: voiceEngine == e.rawValue ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 16))
                         .foregroundStyle(voiceEngine == e.rawValue ? Theme.accent : Theme.textTertiary)
@@ -369,31 +410,61 @@ private struct VoicePage: View {
                             ForEach(Kokoro.voices, id: \.id) { Text($0.name).tag($0.id) }
                         }
                         .labelsHidden().frame(width: 160)
-                        Button(previewing ? "…" : "Play") {
-                            previewing = true
-                            Task {
-                                await Self.previewSpeaker.speak("Hey! I'm Perch. This is how I sound now. Better, right?")
-                                previewing = false
-                            }
-                        }
-                        .buttonStyle(ChipStyle(light: true))
-                        .disabled(previewing)
+                        playButton
                     }
                 }
             }
         }
+        if voiceEngine == VoiceEngine.elevenlabs.rawValue {
+            SettingsGroup(title: "ElevenLabs") {
+                SettingsRow(title: "API key", subtitle: "Also used for ElevenLabs Scribe speech to text.") {
+                    SecureField("ElevenLabs key", text: $settings.elevenlabsKey).settingsField()
+                }
+                SettingsRow(title: "Pace") {
+                    Slider(value: $voiceSpeed, in: 0.8...1.15).frame(width: 160)
+                }
+                SettingsRow(title: "Voice", subtitle: "Or paste any voice id from your ElevenLabs library.", last: true) {
+                    HStack(spacing: 6) {
+                        Picker("", selection: $elevenlabsVoice) {
+                            ForEach(ElevenLabs.voices, id: \.id) { Text($0.name).tag($0.id) }
+                            if !ElevenLabs.voices.contains(where: { $0.id == elevenlabsVoice }) {
+                                Text("Custom").tag(elevenlabsVoice)
+                            }
+                        }
+                        .labelsHidden().frame(width: 160)
+                        playButton.disabled(settings.elevenlabsKey.isEmpty)
+                    }
+                }
+            }
+            Link("Get an ElevenLabs key", destination: URL(string: "https://elevenlabs.io/app/settings/api-keys")!)
+                .font(.system(size: 11))
+        }
+    }
+
+    private var playButton: some View {
+        Button(previewing ? "…" : "Play") {
+            previewing = true
+            Task {
+                await Self.previewSpeaker.speak("Hey! I'm Perch. This is how I sound now. Better, right?")
+                previewing = false
+            }
+        }
+        .buttonStyle(ChipStyle(light: true))
+        .disabled(previewing)
     }
 }
 
 private struct MicrophonePage: View {
     @State private var granted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @AppStorage("speechEngine") private var engine = SpeechEngine.parakeet.rawValue
+    @AppStorage(MicrophoneChoice.defaultsKey) private var micUID = ""
+    @State private var mics: [MicrophoneChoice.Device] = []
     @State private var parakeet: Parakeet.State = .notLoaded
 
     var body: some View {
         SettingsGroup(title: "Speech to text") {
             SettingsRow(title: "Engine", subtitle: engine == SpeechEngine.scribe.rawValue
-                        ? "ElevenLabs Scribe v2 through your OpenRouter key. Most accurate, about $0.11 per hour of talking."
+                        ? CloudTranscriber.settingsNote
                         : "NVIDIA Parakeet, runs privately on your Mac. Free and offline.",
                         last: engine == SpeechEngine.scribe.rawValue) {
                 Picker("", selection: $engine) {
@@ -416,9 +487,16 @@ private struct MicrophonePage: View {
         .task { parakeet = await Parakeet.shared.state }
 
         SettingsGroup(title: "Input") {
-            SettingsRow(title: "Microphone", subtitle: "Perch uses your system input device. Change it in System Settings → Sound.") {
-                Text(AVCaptureDevice.default(for: .audio)?.localizedName ?? "None")
-                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            SettingsRow(title: "Microphone", subtitle: "Used for talking to Perch and for dictation.") {
+                Picker("", selection: $micUID) {
+                    Text("System default (\(MicrophoneChoice.systemDefaultName))").tag("")
+                    ForEach(mics) { Text($0.name).tag($0.id) }
+                    if !micUID.isEmpty && !mics.contains(where: { $0.id == micUID }) {
+                        Text("Unplugged microphone").tag(micUID)
+                    }
+                }
+                .labelsHidden().frame(width: 230)
+                .onAppear { mics = MicrophoneChoice.devices }
             }
             SettingsRow(title: "Access", last: true) {
                 if granted {

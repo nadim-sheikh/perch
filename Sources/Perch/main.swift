@@ -27,7 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showHome()
         }
         notch.show()
-        IntegrationSuggestions.shared.start()
+        #if PERCH_OPENROUTER
+        IntegrationSuggestions.shared.start()  // connections are "coming soon" in the standard build
+        #endif
         ElementMarks.startTracking()
         SpeechRecognizer.preloadParakeet()
         Speaker.warmUp()
@@ -87,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(item("New chat", #selector(newConversation), "n"))
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(openSettings), ","))
+        menu.addItem(item("Made by \(Credits.developer) (\(Credits.handle))", #selector(openCredits), ""))
         menu.addItem(item("Quit Perch", #selector(quit), "q"))
         statusItem.menu = menu
     }
@@ -147,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func stopTalking() { companion.interrupt(); BuddyState.shared.bubbleText = "" }
     @objc func newConversation() { companion.resetConversation() }
     @objc func quit() { NSApp.terminate(nil) }
+    @objc func openCredits() { NSWorkspace.shared.open(Credits.twitter) }
 }
 
 struct AskField: View {
@@ -169,8 +173,8 @@ struct AskField: View {
     }
 }
 
-if let i = CommandLine.arguments.firstIndex(of: "--demo-shots"), i + 1 < CommandLine.arguments.count {
-    MainActor.assumeIsolated { DemoShots.render(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
+if let i = CommandLine.arguments.firstIndex(of: "--demo-video"), i + 1 < CommandLine.arguments.count {
+    MainActor.assumeIsolated { DemoVideo.render(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
     exit(0)
 }
 

@@ -6,3 +6,8 @@ build/
 
 # Local-only research notes (not part of the app)
 docs/research/
+
+# Local-only build switch and notes
+.perch-local
+docs/qa/
+dist/

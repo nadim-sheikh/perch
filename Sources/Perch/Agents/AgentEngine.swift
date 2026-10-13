@@ -24,45 +24,47 @@ enum AgentEngineError: LocalizedError {
     case emptyReply
 
     var errorDescription: String? {
+        let p = AIProvider.current.title
         switch self {
-        case .missingKey: return "Add your OpenRouter key in Settings → AI Models."
-        case .http(let code, let body): return "OpenRouter error \(code): \(body.prefix(400))"
-        case .stream(let message): return "OpenRouter error: \(message.prefix(400))"
+        case .missingKey: return "Add your \(p) key in Settings → AI Models."
+        case .http(let code, let body): return "\(p) error \(code): \(body.prefix(400))"
+        case .stream(let message): return "\(p) error: \(message.prefix(400))"
         case .slow(let seconds): return "The model is slow right now: it hadn't started answering after \(Int(seconds)) seconds. Try again in a moment."
-        case .incomplete: return "The connection to OpenRouter ended before the reply finished. Try again."
+        case .incomplete: return "The connection to \(p) ended before the reply finished. Try again."
         case .emptyReply: return "No reply, try again."
         }
     }
 
-    /// Plain-language text for any error message from OpenRouter or the network. Unknown text is returned as is.
+    /// Plain-language text for any error message from the AI provider or the network. Unknown text is returned as is.
     static func friendly(_ raw: String) -> String {
         let lower = raw.lowercased()
+        let p = AIProvider.current.title
         func has(_ needles: String...) -> Bool { needles.contains { lower.contains($0) } }
-        if has("add your openrouter key") { return AgentEngineError.missingKey.errorDescription ?? raw }
+        if has("add your") && has("key in settings") { return AgentEngineError.missingKey.errorDescription ?? raw }
         if has("error 401", "no auth", "user not found", "invalid api key", "missing authentication") {
-            return "OpenRouter didn't accept your key. Check it in Settings → AI Models."
+            return "\(p) didn't accept your key. Check it in Settings → AI Models."
         }
         if has("can only afford", "requires more credits", "fewer max_tokens") {
-            return "Your OpenRouter credits are running low, too low for this request. Add credits at openrouter.ai, then try again."
+            return "Your \(p) credits are running low, too low for this request. Add credits in your \(p) account, then try again."
         }
         if has("error 402", "insufficient credits", "out of credits") {
-            return "Your OpenRouter account is out of credits. Add credits at openrouter.ai, then try again."
+            return "Your \(p) account is out of credits. Add credits in your \(p) account, then try again."
         }
         if has("error 429", "rate limit", "rate-limit") {
-            return "OpenRouter is getting too many requests right now. Wait a moment, then try again."
+            return "\(p) is getting too many requests right now. Wait a moment, then try again."
         }
         if has("no endpoints", "error 404") {
-            return "The AI model isn't available on OpenRouter right now. Try again later or pick another model in Settings → AI Models."
+            return "The AI model isn't available on \(p) right now. Try again later or pick another model in Settings → AI Models."
         }
         if lower.range(of: #"error 5\d\d"#, options: .regularExpression) != nil || has("bad gateway", "service unavailable", "internal server error") {
-            return "OpenRouter or the model's provider is having trouble. Try again in a moment."
+            return "\(p) or the model's provider is having trouble. Try again in a moment."
         }
         if has("error 408", "timed out", "timeout") {
-            return "OpenRouter took too long to respond. Try again in a moment."
+            return "\(p) took too long to respond. Try again in a moment."
         }
         if has("offline", "not connected to the internet", "network connection was lost", "could not connect to the server",
                "cannot connect to host", "cannot find host", "a server with the specified hostname could not be found") {
-            return "Can't reach OpenRouter. Check your internet connection, then try again."
+            return "Can't reach \(p). Check your internet connection, then try again."
         }
         if has("tool use") || has("tools") && has("support") {
             return "The model couldn't use its tools for this request. Try again in a moment."
@@ -73,7 +75,7 @@ enum AgentEngineError: LocalizedError {
     static func friendly(_ error: Error) -> String { friendly(error.localizedDescription) }
 }
 
-/// Runs one agent turn on OpenRouter: the model picks tools, Perch runs them on this Mac,
+/// Runs one agent turn on the AI provider: the model picks tools, Perch runs them on this Mac,
 /// and the loop continues until the model answers without calling a tool.
 @MainActor
 final class AgentRun {
@@ -118,7 +120,7 @@ final class AgentRun {
     /// Runs one reply's tool calls. Independent lookups (reading files, web pages) run at the same
     /// time; anything that changes things or touches the screen runs in order. Calls whose arguments
     /// didn't arrive whole are answered with an error instead of being run.
-    private func runTools(_ reply: OpenRouterChat.Reply, toolbox: AgentToolbox) async throws -> [ToolOutput] {
+    private func runTools(_ reply: ChatAPI.Reply, toolbox: AgentToolbox) async throws -> [ToolOutput] {
         let calls = reply.toolCalls
         let inputs = calls.map(\.input)
         let problems = calls.map(reply.argumentProblem)
@@ -180,7 +182,7 @@ final class AgentRun {
         var userContent: [[String: Any]] = [["type": "text", "text": prompt]]
         if let shot = screenshot {
             userContent.append(["type": "text", "text": "The user's screen when they asked (screen \(shot.index)):"])
-            userContent.append(OpenRouterChat.imagePart(shot.jpegBase64))
+            userContent.append(ChatAPI.imagePart(shot.jpegBase64))
             toolbox.rememberScreens([shot])
         }
         messages.append(["role": "user", "content": userContent])
@@ -192,8 +194,8 @@ final class AgentRun {
             for step in 1...Self.maxSteps {
                 try Task.checkCancellation()
                 let modelStart = Date()
-                let reply = try await OpenRouterChat.complete(model: model, apiKey: apiKey,
-                                                              messages: OpenRouterChat.trimImages(messages),
+                let reply = try await ChatAPI.complete(model: model, apiKey: apiKey,
+                                                              messages: ChatAPI.trimImages(messages),
                                                               tools: toolbox.definitions) { [weak self] in self?.onEvent(.textDelta($0)) }
                 if let c = reply.cost { cost = (cost ?? 0) + c }
                 let modelTime = Self.seconds(since: modelStart)
@@ -221,7 +223,7 @@ final class AgentRun {
                 perchLog.notice("helper \(self.agent.id) step \(step): model \(modelTime)s, \(reply.toolCalls.count) tool(s) \(Self.seconds(since: toolStart))s")
                 if !images.isEmpty {
                     var parts: [[String: Any]] = [["type": "text", "text": "Screenshot from the tool call above."]]
-                    parts += images.map(OpenRouterChat.imagePart)
+                    parts += images.map(ChatAPI.imagePart)
                     messages.append(["role": "user", "content": parts])
                 }
             }
@@ -237,10 +239,9 @@ final class AgentRun {
     }
 }
 
-/// OpenRouter chat completions with tool calling, shared by helpers and the buddy.
+/// Streaming chat completions with tool calling on the current provider, shared by helpers and the buddy.
 @MainActor
-enum OpenRouterChat {
-    static let endpoint = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+enum ChatAPI {
     /// Older screenshots are swapped for a note so long runs don't resend every image.
     static let imagesKept = 1
     /// Waits before each retry; the number of entries is the number of retries.
@@ -302,19 +303,9 @@ enum OpenRouterChat {
                          maxTokens: Int = 16_000, firstReplyTimeout: TimeInterval = 120,
                          onText: (String) -> Void) async throws -> Reply {
         guard !apiKey.isEmpty else { throw AgentEngineError.missingKey }
-        var body: [String: Any] = ["model": model, "messages": messages, "stream": true, "usage": ["include": true],
-                                   "max_tokens": maxTokens,
-                                   // Helpers act step by step: keep each step's hidden thinking short and use the
-                                   // quickest provider, since every step waits on the one before.
-                                   "provider": ["sort": "latency"]]
-        if let r = PerchModel.reasoningParam(model) { body["reasoning"] = r }
-        if !tools.isEmpty { body["tools"] = tools }
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.setValue("Perch", forHTTPHeaderField: "X-Title")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Helpers act step by step: keep each step's hidden thinking short, since every step waits on the one before.
+        let req = try AIProvider.current.chatRequest(key: apiKey, model: model, messages: messages, tools: tools,
+                                                     maxTokens: maxTokens, quick: true, usage: true)
 
         let deadline = Date().addingTimeInterval(firstReplyTimeout)
         var attempt = 0
@@ -331,7 +322,7 @@ enum OpenRouterChat {
                 if let after = state.retryAfter, after > maxRetryAfter { throw error }
                 let wait = max(backoff, state.retryAfter ?? 0)
                 guard Date().addingTimeInterval(wait) < deadline else { throw error }
-                perchLog.notice("openrouter: retry \(attempt + 1) in \(String(format: "%.1f", wait))s after \(error.localizedDescription)")
+                perchLog.notice("chat: retry \(attempt + 1) in \(String(format: "%.1f", wait))s after \(error.localizedDescription)")
                 try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                 attempt += 1
             }

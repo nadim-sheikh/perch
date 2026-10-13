@@ -17,7 +17,7 @@ enum LLMError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingKey: return "Add your OpenRouter key in Settings → AI Models."
+        case .missingKey: return "Add your \(AIProvider.current.title) key in Settings → AI Models."
         case .http(let code, let body): return "API error \(code): \(body.prefix(300))"
         case .stream(let message): return "API error: \(message.prefix(300))"
         case .truncated: return "The reply was too long and got cut off."
@@ -26,12 +26,12 @@ enum LLMError: LocalizedError {
     }
 }
 
-/// Streams a plain text reply (no tools) from Perch's model on OpenRouter. Screenshots are attached
+/// Streams a plain text reply (no tools) from Perch's model on the current provider. Screenshots are attached
 /// only to the newest user turn; earlier turns are sent as plain text history.
 /// The stream only finishes normally when the reply is complete: an error object, a cut-off
 /// reply or a dropped connection all throw, so callers never act on partial text.
 struct LLMClient {
-    var apiKey = AppSettings.shared.openrouterKey
+    var apiKey = AppSettings.shared.activeKey
     var model = PerchModel.id
     var maxTokens = 4096
     /// Skip the model's hidden "thinking" pass. It was adding ~5s before the first word.
@@ -75,9 +75,6 @@ struct LLMClient {
     }
 
     private func makeRequest(system: String, history: [ChatTurn], prompt: String, screens: [CapturedScreen]) throws -> URLRequest {
-        var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.setValue("Perch", forHTTPHeaderField: "X-Title")
         var content: [[String: Any]] = screens.flatMap { s -> [[String: Any]] in
             [
                 ["type": "text", "text": screenCaption(s)],
@@ -88,17 +85,8 @@ struct LLMClient {
         var messages: [[String: Any]] = [["role": "system", "content": system]]
         messages += history.map { ["role": $0.role.rawValue, "content": $0.text] }
         messages.append(["role": "user", "content": content])
-        var body: [String: Any] = ["model": model, "stream": true, "max_tokens": maxTokens, "messages": messages,
-                                   // Route to whichever provider answers first.
-                                   "provider": ["sort": "latency"]]
-        // GLM 5.3 Flash can't switch reasoning off ("minimal" is refused with a 400), so "low" is the fastest it allows.
-        if !thinking, let r = PerchModel.reasoningParam(model) { body["reasoning"] = r }
-
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 120
-        return req
+        return try AIProvider.current.chatRequest(key: apiKey, model: model, messages: messages,
+                                                  maxTokens: maxTokens, quick: !thinking)
     }
 
     private func screenCaption(_ s: CapturedScreen) -> String {
