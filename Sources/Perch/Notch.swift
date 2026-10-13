@@ -355,6 +355,9 @@ struct NotchRootView: View {
             .prefix(3).map { $0 }
     }
 
+    @State private var homeMounted = false
+    @State private var homeOpacity: Double = 0
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
@@ -362,37 +365,58 @@ struct NotchRootView: View {
                     CornerGlow(color: accent).frame(width: size.width + 60, height: size.height + 40).id("glow")
                 }
 
-                NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11)
-                    .fill(model.presentation == .home ? Theme.window : Color.black)
-                    .shadow(color: .black.opacity(model.presentation.isCard ? 0.45 : 0), radius: 18, y: 6)
-                    .onTapGesture { if model.presentation == .docked || model.presentation == .agents { model.openHome?(nil) } }
+                // One surface: the same black shape is the notch, the strips, the cards and Home.
+                ZStack(alignment: .top) {
+                    Color.black
 
-                Group {
-                    switch model.presentation {
-                    case .docked: dockedView
-                    case .listening, .thinking, .speaking: activityStrip
-                    case .agents: agentStrip
-                    case .peek: peek.padding(.horizontal, 26)
-                    case .textInput: NotchTextInput().padding(.horizontal, 26)
-                    case .textResponse: NotchTextResponse().padding(.horizontal, 26)
-                    case .suggestion: NotchSuggestion().padding(.horizontal, 24)
-                    case .home:
+                    // Home stays mounted at full size and is revealed / swallowed by the shape as it grows and shrinks.
+                    if homeMounted {
                         HomeView(onClose: { model.closeHome() })
-                            .padding(.horizontal, 8)
-                            .clipShape(NotchShape(radius: 28))
+                            .frame(width: NotchModel.homeSize.width - 16, height: NotchModel.homeSize.height)
+                            .opacity(homeOpacity)
+                            .allowsHitTesting(model.presentation == .home)
                     }
+
+                    Group {
+                        switch model.presentation {
+                        case .docked: dockedView
+                        case .listening, .thinking, .speaking: activityStrip
+                        case .agents: agentStrip
+                        case .peek: peek.padding(.horizontal, 26)
+                        case .textInput: NotchTextInput().padding(.horizontal, 26)
+                        case .textResponse: NotchTextResponse().padding(.horizontal, 26)
+                        case .suggestion: NotchSuggestion().padding(.horizontal, 24)
+                        case .home: EmptyView()
+                        }
+                    }
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(.easeOut(duration: 0.22).delay(0.08)),
+                        removal: .opacity.animation(.easeIn(duration: 0.1))))
+                    .id(contentKey)
                 }
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
-                        .animation(.easeOut(duration: 0.22).delay(model.presentation == .home ? 0.2 : 0.08)),
-                    removal: .opacity.animation(.easeIn(duration: 0.1))))
-                .id(contentKey)
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .clipShape(NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11))
+                .shadow(color: .black.opacity(model.presentation.isCard ? 0.45 : 0), radius: 18, y: 6)
+                .contentShape(NotchShape(radius: 11))
+                .onTapGesture { if model.presentation == .docked || model.presentation == .agents { model.openHome?(nil) } }
             }
-            .frame(width: size.width, height: size.height)
+            .frame(width: size.width + 60, height: size.height, alignment: .top)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
+        .onChange(of: model.presentation) { old, new in
+            if new == .home {
+                homeMounted = true
+                withAnimation(.easeOut(duration: 0.28).delay(0.06)) { homeOpacity = 1 }
+            } else if old == .home {
+                // Fade the content as the shape shrinks over it, then unmount.
+                withAnimation(.easeIn(duration: 0.22)) { homeOpacity = 0 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                    if model.presentation != .home { homeMounted = false }
+                }
+            }
+        }
     }
 
     /// Listening, thinking and speaking share one strip, so switching between

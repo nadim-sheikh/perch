@@ -76,7 +76,7 @@ struct LLMClient {
             content.append(["type": "text", "text": prompt])
             var messages: [[String: Any]] = history.map { ["role": $0.role.rawValue, "content": $0.text] }
             messages.append(["role": "user", "content": content])
-            body = ["model": model, "max_tokens": 1024, "system": system, "stream": true, "messages": messages]
+            body = ["model": model, "max_tokens": 600, "system": system, "stream": true, "messages": messages]
 
         case .openai, .openrouter:
             // OpenRouter speaks the OpenAI Chat Completions format.

@@ -106,6 +106,16 @@ final class AppSettings: ObservableObject {
 
     var cursorColor: Color { Color(hex: cursorColorHex) ?? .blue }
 
+    /// "Quick replies" uses a faster model for the buddy's spoken answers.
+    var replyModel: String {
+        guard UserDefaults.standard.object(forKey: "quickReplies") as? Bool ?? true else { return activeModel }
+        switch provider {
+        case .anthropic: return "claude-haiku-5-5"
+        case .openrouter: return "anthropic/claude-haiku-5.5"
+        case .openai: return "gpt-4o-mini"
+        }
+    }
+
     var activeModel: String {
         switch provider {
         case .anthropic: return anthropicModel

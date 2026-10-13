@@ -111,8 +111,29 @@ final class Companion {
         }
         perchLog.notice("ask: captured \(screens.count) screens, provider \(settings.provider.rawValue) model \(settings.activeModel) key \(settings.activeKey.isEmpty ? "missing" : "set")")
 
-        let client = LLMClient(provider: settings.provider, apiKey: settings.activeKey, model: settings.activeModel)
+        let client = LLMClient(provider: settings.provider, apiKey: settings.activeKey, model: settings.replyModel)
         var full = ""
+        // Speak sentence by sentence while the answer is still arriving.
+        let speakLive = !inNotch && settings.voiceEngine == .kokoro
+        var spokenUpTo = 0
+        if speakLive { speaker.beginLive() }
+        func flushSpeech(final: Bool) {
+            let visible = MarkTags.stripAll(full)
+            guard visible.count > spokenUpTo else { return }
+            let pending = String(visible.dropFirst(spokenUpTo))
+            var cut = pending.endIndex
+            if !final {
+                // Only speak up to the last finished sentence (or a comma after a long run).
+                guard let r = pending.range(of: #"[.!?](\s)"#, options: [.regularExpression, .backwards]) else {
+                    if pending.split(separator: " ").count > 16, let c = pending.range(of: ", ", options: .backwards) { cut = c.upperBound } else { return }
+                    let piece = String(pending[..<cut]); spokenUpTo += piece.count; speaker.enqueueLive(piece); return
+                }
+                cut = r.upperBound
+            }
+            let piece = String(pending[..<cut])
+            spokenUpTo += piece.count
+            speaker.enqueueLive(piece)
+        }
         do {
             let stream = client.stream(
                 system: Prompts.system(name: settings.buddyName, screenCount: screens.count) + Handoff.rosterNote(),
@@ -133,6 +154,7 @@ final class Companion {
                     state.bubbleText = visible
                 }
                 store.streamingText = visible
+                if speakLive { flushSpeech(final: false) }
             }
         } catch {
             perchLog.error("ask: error \(error.localizedDescription)")
@@ -165,7 +187,12 @@ final class Companion {
             state.phase = .idle
             return
         }
-        await speaker.speak(spoken)
+        if speakLive {
+            flushSpeech(final: true)
+            await speaker.finishLive()
+        } else {
+            await speaker.speak(spoken)
+        }
         if Task.isCancelled { return }
         state.phase = .idle
         // Linger just long enough to finish reading, then fade.

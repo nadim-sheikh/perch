@@ -19,7 +19,7 @@ struct CapturedScreen {
 }
 
 enum ScreenCapture {
-    static let maxImageWidth: CGFloat = 1440
+    static let maxImageWidth: CGFloat = 1280
 
     static func hasPermission() -> Bool { CGPreflightScreenCaptureAccess() }
     static func requestPermission() { CGRequestScreenCaptureAccess() }
@@ -50,7 +50,7 @@ enum ScreenCapture {
 
             let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             let rep = NSBitmapImageRep(cgImage: cgImage)
-            guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { continue }
+            guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6]) else { continue }
 
             results.append(CapturedScreen(
                 index: i + 1,

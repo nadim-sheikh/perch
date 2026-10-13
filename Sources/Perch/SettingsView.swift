@@ -228,6 +228,7 @@ private struct AIPage: View {
     @AppStorage("openrouterModel") private var openrouterModel = LLMProvider.openrouter.defaultModel
     @State private var openrouterModels: [String] = []
     @State private var loading = false
+    @AppStorage("quickReplies") private var quickReplies = true
 
     var body: some View {
         SettingsGroup(title: "Provider") {
@@ -270,6 +271,12 @@ private struct AIPage: View {
             }
         }
 
+        SettingsGroup(title: "Speed") {
+            SettingsRow(title: "Quick replies", subtitle: "Faster model for spoken answers. Helpers still use your main model.", last: true) {
+                Toggle("", isOn: $quickReplies).toggleStyle(GlassToggleStyle())
+            }
+        }
+
         SettingsGroup(title: "API keys") {
             SettingsRow(title: "Anthropic", subtitle: nil) { SecureField("sk-ant-…", text: $settings.anthropicKey).settingsField() }
             SettingsRow(title: "OpenAI", subtitle: nil) { SecureField("sk-…", text: $settings.openaiKey).settingsField() }
@@ -289,7 +296,7 @@ private struct AIPage: View {
 private struct VoicePage: View {
     @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
-    @AppStorage("voiceSpeed") private var voiceSpeed = 0.94
+    @AppStorage("voiceSpeed") private var voiceSpeed = 0.97
     @State private var previewing = false
     @AppStorage("openaiVoice") private var openaiVoice = "alloy"
     @AppStorage("systemVoiceID") private var systemVoiceID = ""

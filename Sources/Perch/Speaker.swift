@@ -62,6 +62,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     func stop() {
         generation += 1
+        liveTask?.cancel()
+        liveTask = nil
+        liveQueue = []
         synth.stopSpeaking(at: .immediate)
         player?.stop()
         player = nil
@@ -81,11 +84,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     /// Speaks sentence by sentence: the next one renders while the current one plays.
     private func speakKokoro(_ text: String, voice: String) async -> Bool {
-        let sentences = Self.sentences(Self.speakable(text))
+        let sentences = Self.phrases(Self.speakable(text))
         guard !sentences.isEmpty else { return true }
         generation += 1
         let gen = generation
-        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.94)
+        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.97)
         var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice, speed: speed) }
         for i in sentences.indices {
             guard let data = await next?.value, gen == generation else { return i > 0 }
@@ -124,6 +127,86 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     }
 
     private var generation = 0
+
+    // MARK: Live streaming speech
+
+    private var liveQueue: [String] = []
+    private var liveFinished = false
+    private var liveTask: Task<Void, Never>?
+
+    /// Starts a live session: phrases are spoken as soon as they're enqueued.
+    func beginLive() {
+        stop()
+        liveQueue = []
+        liveFinished = false
+        let gen = generation
+        let voice = AppSettings.shared.kokoroVoice
+        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.97)
+        liveTask = Task { [weak self] in
+            var prefetched: (String, Task<Data?, Never>)?
+            while let self, gen == self.generation {
+                if self.liveQueue.isEmpty && prefetched == nil {
+                    if self.liveFinished { break }
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                    continue
+                }
+                let current: (String, Task<Data?, Never>)
+                if let p = prefetched { current = p; prefetched = nil } else {
+                    let phrase = self.liveQueue.removeFirst()
+                    current = (phrase, Task { try? await Kokoro.shared.synthesize(phrase, voice: voice, speed: speed) })
+                }
+                // Render the next phrase while this one plays.
+                if !self.liveQueue.isEmpty {
+                    let next = self.liveQueue.removeFirst()
+                    prefetched = (next, Task { try? await Kokoro.shared.synthesize(next, voice: voice, speed: speed) })
+                }
+                guard let data = await current.1.value, gen == self.generation, let player = try? AVAudioPlayer(data: data) else { continue }
+                self.player = player
+                player.delegate = self
+                await withCheckedContinuation { cont in
+                    self.done = cont
+                    player.play()
+                }
+                guard gen == self.generation else { break }
+                let end = current.0.last
+                let pause: UInt64 = end == "?" || end == "!" ? 300 : end == "." ? 220 : 90
+                try? await Task.sleep(nanoseconds: pause * 1_000_000)
+            }
+        }
+    }
+
+    func enqueueLive(_ text: String) {
+        guard AppSettings.shared.voiceEngine == .kokoro else { return }
+        liveQueue.append(contentsOf: Self.phrases(Self.speakable(text)))
+    }
+
+    /// Waits until everything queued has been spoken.
+    func finishLive() async {
+        liveFinished = true
+        await liveTask?.value
+        liveTask = nil
+    }
+
+    /// Splits text into short phrases: sentences, and long sentences at commas.
+    /// Short phrases keep the voice clear (no slurred words) and start sooner.
+    static func phrases(_ text: String) -> [String] {
+        var out: [String] = []
+        for sentence in sentences(text) {
+            let words = sentence.split(separator: " ")
+            if words.count <= 14 { out.append(sentence); continue }
+            var current = ""
+            for part in sentence.split(separator: ",", omittingEmptySubsequences: false) {
+                let piece = part.trimmingCharacters(in: .whitespaces)
+                if piece.isEmpty { continue }
+                if current.isEmpty { current = piece } else if current.split(separator: " ").count < 6 { current += ", " + piece } else {
+                    out.append(current + ",")
+                    current = piece
+                }
+            }
+            if !current.isEmpty { out.append(current) }
+        }
+        return out
+    }
 
     static func sentences(_ text: String) -> [String] {
         var out: [String] = []
