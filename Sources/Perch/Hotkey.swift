@@ -5,6 +5,9 @@ import AppKit
 /// - Double-tap Control: open the type box in the notch.
 /// - Hold Control+Shift: dictate into the focused text field.
 /// - Press Control+Option+F: fix spelling in the focused text field.
+///
+/// Hold combos start on a short delay, and any key press cancels a pending hold,
+/// so a shortcut like Ctrl+Option+F never accidentally starts voice listening.
 @MainActor
 final class PushToTalkMonitor {
     var onPress: (() -> Void)?
@@ -18,47 +21,79 @@ final class PushToTalkMonitor {
     private var lastControlTapAt: Date?
     private var otherKeyDuringControl = false
 
-    private var flagsGlobal: Any?
-    private var flagsLocal: Any?
-    private var keyGlobal: Any?
-    private var keyLocal: Any?
+    private var monitors: [Any] = []
 
-    private var isDown = false
-    private var dictateDown = false
+    private var talkActive = false
+    private var dictateActive = false
+    private var pendingTalk: DispatchWorkItem?
+    private var pendingDictate: DispatchWorkItem?
+    private let holdDelay: TimeInterval = 0.2
     private let talkCombo: NSEvent.ModifierFlags = [.control, .option]
     private let dictateCombo: NSEvent.ModifierFlags = [.control, .shift]
 
     func start() {
-        flagsGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
-            MainActor.assumeIsolated { self?.handleFlags(e) }
+        for mask in [NSEvent.EventTypeMask.flagsChanged] {
+            monitors.append(NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] e in
+                MainActor.assumeIsolated { self?.handleFlags(e) }
+            } as Any)
+            monitors.append(NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in
+                MainActor.assumeIsolated { self?.handleFlags(e) }
+                return e
+            } as Any)
         }
-        flagsLocal = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
-            MainActor.assumeIsolated { self?.handleFlags(e) }
-            return e
-        }
-        keyGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
+        monitors.append(NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
             MainActor.assumeIsolated { self?.handleKey(e) }
-        }
-        keyLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+        } as Any)
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             MainActor.assumeIsolated { self?.handleKey(e) }
             return e
-        }
+        } as Any)
     }
 
     private func handleFlags(_ event: NSEvent) {
         let flags = event.modifierFlags.intersection([.control, .option, .command, .shift])
         detectControlDoubleTap(flags)
 
-        let talk = flags == talkCombo
-        if talk && !isDown { isDown = true; onPress?() }
-        else if !talk && isDown { isDown = false; onRelease?() }
+        // Talk (hold, delayed)
+        if flags == talkCombo {
+            if pendingTalk == nil && !talkActive {
+                let w = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.pendingTalk = nil
+                    self.talkActive = true
+                    self.onPress?()
+                }
+                pendingTalk = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: w)
+            }
+        } else {
+            pendingTalk?.cancel(); pendingTalk = nil
+            if talkActive { talkActive = false; onRelease?() }
+        }
 
-        let dictate = flags == dictateCombo
-        if dictate && !dictateDown { dictateDown = true; onDictateStart?() }
-        else if !dictate && dictateDown { dictateDown = false; onDictateEnd?() }
+        // Dictation (hold, delayed)
+        if flags == dictateCombo {
+            if pendingDictate == nil && !dictateActive {
+                let w = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.pendingDictate = nil
+                    self.dictateActive = true
+                    self.onDictateStart?()
+                }
+                pendingDictate = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: w)
+            }
+        } else {
+            pendingDictate?.cancel(); pendingDictate = nil
+            if dictateActive { dictateActive = false; onDictateEnd?() }
+        }
     }
 
     private func handleKey(_ event: NSEvent) {
+        // A real key press means the user is doing a shortcut, not holding to talk.
+        pendingTalk?.cancel(); pendingTalk = nil
+        pendingDictate?.cancel(); pendingDictate = nil
+
         let flags = event.modifierFlags.intersection([.control, .option, .command, .shift])
         if flags == [.control, .option], event.keyCode == 3 { onFixText?() }   // F
     }
