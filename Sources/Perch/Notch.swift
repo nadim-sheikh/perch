@@ -568,7 +568,7 @@ struct NotchRootView: View {
         Group {
             if model.hardwareNotchWidth == 0 {
                 // Other screens: just the mascot, with a dot when a helper has news.
-                MascotView(size: 20, happy: true)
+                MascotView(size: 20, happy: true, blinks: true)
                     .overlay(alignment: .topTrailing) {
                         if !agents.unread.isEmpty { Circle().fill(accent).frame(width: 7, height: 7).offset(x: 3, y: -1) }
                     }
@@ -580,7 +580,7 @@ struct NotchRootView: View {
     private var dockedNotchView: some View {
         strip {
             // The mascot shows Perch is running, even with nothing happening.
-            MascotView(size: 18, happy: true)
+            MascotView(size: 18, happy: true, blinks: true)
         } right: {
             if !agents.unread.isEmpty {
                 Text("\(agents.unread.count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
@@ -641,11 +641,6 @@ struct NotchRootView: View {
                     .buttonStyle(IconButtonStyle())
             }
             .frame(height: model.notchHeight)
-
-            CursorShape().fill(accent)
-                .frame(width: 12, height: 14)
-                .shadow(color: accent.opacity(0.9), radius: 6)
-                .padding(.bottom, 6)
 
             if agentRows.isEmpty && store.conversations.isEmpty {
                 VStack(spacing: 6) {

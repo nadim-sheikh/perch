@@ -118,7 +118,10 @@ struct MascotView: View {
     /// Gentle floating motion; only for big hero mascots (it costs a redraw every frame).
     var animated = false
     var showHands = false
+    /// Blinks every few seconds: a small sign of life (used for the notch mascot).
+    var blinks = false
     @State private var bob = false
+    @State private var eyesClosed = false
 
     var body: some View {
         ZStack {
@@ -144,6 +147,7 @@ struct MascotView: View {
                         .frame(width: size * 0.15, height: size * 0.08)
                 }
                 .offset(y: size * 0.04)
+                .scaleEffect(x: 1, y: eyesClosed ? 0.15 : 1, anchor: .center)
             }
 
             if showHands {
@@ -158,6 +162,19 @@ struct MascotView: View {
         .scaleEffect(x: animated && bob ? 1.02 : 1, y: animated && bob ? 0.98 : 1, anchor: .bottom)
         .offset(y: animated ? (bob ? -2 : 1) : 0)
         .onAppear { if animated { withAnimation(.easeInOut(duration: 1.8).repeatForever()) { bob = true } } }
+        .task {
+            guard blinks else { return }
+            // Blink now and then, sometimes twice, so it's clear Perch is awake.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Double.random(in: 3...6)))
+                for _ in 0..<(Int.random(in: 0...3) == 0 ? 2 : 1) {
+                    withAnimation(.easeIn(duration: 0.07)) { eyesClosed = true }
+                    try? await Task.sleep(for: .milliseconds(110))
+                    withAnimation(.easeOut(duration: 0.1)) { eyesClosed = false }
+                    try? await Task.sleep(for: .milliseconds(160))
+                }
+            }
+        }
     }
 
     private struct HappyEye: Shape {
