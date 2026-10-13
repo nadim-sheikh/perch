@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>OpenBuddy</string>
+    <key>CFBundleIdentifier</key><string>dev.openbuddy.app</string>
+    <key>CFBundleName</key><string>OpenBuddy</string>
+    <key>CFBundleDisplayName</key><string>OpenBuddy</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>14.2</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>OpenBuddy listens while you hold the talk hotkey so you can ask questions by voice.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>OpenBuddy turns your voice into text so it can answer you.</string>
+    <key>NSScreenCaptureUsageDescription</key><string>OpenBuddy looks at your screen when you ask a question so it can help with what you see.</string>
+</dict>
+</plist>
