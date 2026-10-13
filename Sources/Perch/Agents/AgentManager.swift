@@ -321,8 +321,8 @@ enum AgentPrompt {
         let df = DateFormatter()
         df.dateStyle = .full
         return """
-        You are \(a.name), one of \(user)'s OpenBuddy helpers on their Mac. Role: \(a.role). \(a.oneLiner)
-        You work in the background; they usually talk to OpenBuddy by voice. Your last message is shown in your chat
+        You are \(a.name), one of \(user)'s Perch helpers on their Mac. Role: \(a.role). \(a.oneLiner)
+        You work in the background; they usually talk to Perch by voice. Your last message is shown in your chat
         with them and its first sentence may be read aloud. Today is \(df.string(from: Date())).
 
         YOUR FOLDER. Your working folder is \(a.folder.path). AGENTS.md there is who you are and your notes. When you

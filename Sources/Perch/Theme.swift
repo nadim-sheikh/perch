@@ -97,58 +97,92 @@ struct GlassToggleStyle: ToggleStyle {
     }
 }
 
-/// OpenBuddy's mascot: a soft round blob with a happy face. Original artwork,
-/// drawn in code so it can be tinted per buddy.
+/// Perch's mascot: a soft round blob with a happy face. Original artwork,
+/// Perch's mascot: a soft, glossy cloud puff with happy eyes. Drawn in code so it
+/// can be tinted per helper and stays crisp at any size.
 struct MascotView: View {
-    var tint: Color = Color(red: 0.62, green: 0.80, blue: 0.98)
+    var tint: Color = Color(red: 0.55, green: 0.80, blue: 0.98)
     var size: CGFloat = 70
     var happy = true
     /// Gentle floating motion; only for big hero mascots (it costs a redraw every frame).
     var animated = false
+    var showHands = false
     @State private var bob = false
 
     var body: some View {
         ZStack {
-            Ellipse()
-                .fill(RadialGradient(colors: [tint.opacity(0.95), tint], center: .init(x: 0.35, y: 0.3), startRadius: 2, endRadius: size))
-                .frame(width: size, height: size * 0.82)
-                .shadow(color: tint.opacity(0.7), radius: size * 0.18)
-            // Little cheeks
-            HStack(spacing: size * 0.36) {
-                Circle().fill(Color.pink.opacity(0.35)).frame(width: size * 0.12)
-                Circle().fill(Color.pink.opacity(0.35)).frame(width: size * 0.12)
+            CloudShape()
+                .fill(
+                    LinearGradient(colors: [tint.mix(with: .white, by: 0.45), tint, tint.mix(with: .black, by: 0.08)],
+                                   startPoint: .top, endPoint: .bottom))
+                .overlay(
+                    // glossy highlight
+                    CloudShape().fill(LinearGradient(colors: [.white.opacity(0.55), .clear], startPoint: .top, endPoint: .center))
+                        .scaleEffect(x: 0.82, y: 0.7, anchor: .top)
+                        .offset(y: size * 0.04)
+                        .blendMode(.screen)
+                )
+                .frame(width: size, height: size * 0.78)
+                .shadow(color: tint.opacity(0.75), radius: size * 0.16)
+
+            if happy {
+                HStack(spacing: size * 0.16) {
+                    HappyEye().stroke(.white, style: StrokeStyle(lineWidth: max(1.5, size * 0.05), lineCap: .round))
+                        .frame(width: size * 0.15, height: size * 0.08)
+                    HappyEye().stroke(.white, style: StrokeStyle(lineWidth: max(1.5, size * 0.05), lineCap: .round))
+                        .frame(width: size * 0.15, height: size * 0.08)
+                }
+                .offset(y: size * 0.04)
             }
-            .offset(y: size * 0.1)
-            // Eyes
-            HStack(spacing: size * 0.2) {
-                Eye(happy: happy).frame(width: size * 0.13, height: size * 0.13)
-                Eye(happy: happy).frame(width: size * 0.13, height: size * 0.13)
+
+            if showHands {
+                HStack(spacing: size * 0.32) {
+                    Capsule().fill(tint.mix(with: .white, by: 0.25)).frame(width: size * 0.2, height: size * 0.13)
+                    Capsule().fill(tint.mix(with: .white, by: 0.25)).frame(width: size * 0.2, height: size * 0.13)
+                }
+                .offset(y: size * 0.38)
+                .shadow(color: tint.opacity(0.5), radius: 3)
             }
-            .offset(y: -size * 0.02)
-            // Smile
-            Smile().stroke(Color(red: 0.15, green: 0.2, blue: 0.35), style: StrokeStyle(lineWidth: size * 0.035, lineCap: .round))
-                .frame(width: size * 0.14, height: size * 0.06)
-                .offset(y: size * 0.12)
         }
-        .offset(y: animated ? (bob ? -2 : 2) : 0)
+        .scaleEffect(x: animated && bob ? 1.02 : 1, y: animated && bob ? 0.98 : 1, anchor: .bottom)
+        .offset(y: animated ? (bob ? -2 : 1) : 0)
         .onAppear { if animated { withAnimation(.easeInOut(duration: 1.8).repeatForever()) { bob = true } } }
     }
 
-    private struct Eye: View {
-        let happy: Bool
-        var body: some View {
-            Circle().fill(Color(red: 0.15, green: 0.2, blue: 0.35))
-                .overlay(Circle().fill(.white).frame(width: 3, height: 3).offset(x: 1.5, y: -1.5))
-        }
-    }
-
-    private struct Smile: Shape {
+    private struct HappyEye: Shape {
         func path(in r: CGRect) -> Path {
             var p = Path()
-            p.move(to: CGPoint(x: r.minX, y: r.minY))
-            p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY), control: CGPoint(x: r.midX, y: r.maxY * 2))
+            p.move(to: CGPoint(x: r.minX, y: r.maxY))
+            p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY), control: CGPoint(x: r.midX, y: r.minY - r.height))
             return p
         }
+    }
+}
+
+/// A puffy cloud silhouette built from overlapping circles.
+struct CloudShape: Shape {
+    func path(in r: CGRect) -> Path {
+        let w = r.width, h = r.height
+        var p = Path()
+        let bumps: [(CGFloat, CGFloat, CGFloat)] = [   // centre x, centre y, radius (fractions of width)
+            (0.30, 0.48, 0.26), (0.52, 0.34, 0.30), (0.74, 0.46, 0.25), (0.18, 0.66, 0.18), (0.84, 0.66, 0.17),
+        ]
+        for (x, y, rad) in bumps {
+            p.addEllipse(in: CGRect(x: r.minX + w * (x - rad), y: r.minY + h * y - w * rad, width: w * rad * 2, height: w * rad * 2))
+        }
+        p.addRoundedRect(in: CGRect(x: r.minX + w * 0.06, y: r.minY + h * 0.52, width: w * 0.88, height: h * 0.46),
+                         cornerSize: CGSize(width: h * 0.23, height: h * 0.23))
+        return p
+    }
+}
+
+extension Color {
+    func mix(with other: Color, by amount: Double) -> Color {
+        let a = NSColor(self).usingColorSpace(.deviceRGB) ?? .white
+        let b = NSColor(other).usingColorSpace(.deviceRGB) ?? .white
+        return Color(red: a.redComponent + (b.redComponent - a.redComponent) * amount,
+                     green: a.greenComponent + (b.greenComponent - a.greenComponent) * amount,
+                     blue: a.blueComponent + (b.blueComponent - a.blueComponent) * amount)
     }
 }
 
@@ -167,9 +201,10 @@ struct AvatarView: View {
     var body: some View {
         let colors = Self.palette[abs(seed.hashValue) % Self.palette.count]
         ZStack {
-            Circle().fill(colors.0)
-            MascotView(tint: colors.1, size: size * 0.62).allowsHitTesting(false)
+            Circle().fill(RadialGradient(colors: [colors.0.mix(with: .white, by: 0.3), colors.0], center: .topLeading, startRadius: 1, endRadius: size))
+            MascotView(tint: colors.1, size: size * 0.66).allowsHitTesting(false).offset(y: size * 0.03)
         }
+        .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
         .frame(width: size, height: size)
     }
 }

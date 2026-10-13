@@ -29,7 +29,7 @@ final class ConversationStore: ObservableObject {
 
     private let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("OpenBuddy", isDirectory: true)
+            .appendingPathComponent("Perch", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("conversations.json")
     }()

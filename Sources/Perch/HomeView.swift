@@ -94,11 +94,20 @@ struct HomeView: View {
 
                 Button(action: onClose) { Image(systemName: "xmark") }
                     .buttonStyle(IconButtonStyle())
-                    .padding(14)
+                    .padding(.top, 44).padding(.trailing, 16)
             }
             .background(Theme.window)
         }
-        .frame(minWidth: 760, minHeight: 500)
+        .overlay(alignment: .top) {
+            // The top edge fades from black so Home reads as the notch opening up.
+            LinearGradient(colors: [.black, .black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 90)
+                .allowsHitTesting(false)
+        }
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous))
+        .overlay(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous)
+            .stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .frame(minWidth: 760, minHeight: 480)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $router.showNewAgent) {
             NewAgentSheet { agent in
@@ -135,10 +144,10 @@ struct HomeSidebar: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 LogoGlyph().frame(width: 22, height: 14)
-                Text("OpenBuddy").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                Text("Perch").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
                 Spacer()
             }
-            .padding(.top, 34)
+            .padding(.top, 52)
             .padding(.horizontal, 16)
 
             HStack(spacing: 8) {
@@ -194,10 +203,6 @@ struct HomeSidebar: View {
                     Text("Free & open source").font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
-                Button { NSWorkspace.shared.open(URL(string: "https://github.com/openbuddy/openbuddy")!) } label: {
-                    Image(systemName: "info.circle")
-                }
-                .buttonStyle(IconButtonStyle())
                 Button { router.settings = .general } label: { Image(systemName: "gearshape.fill") }
                     .buttonStyle(IconButtonStyle())
             }
@@ -304,9 +309,9 @@ struct HomeEmptyState: View {
         VStack(spacing: 14) {
             Spacer()
             ZStack(alignment: .top) {
-                TalkButton(title: "Hi, how can I help?")
-                    .padding(.top, 52)
-                MascotView(size: 78, animated: true)
+                TalkButton(title: "Hi, how can I help ^_^?")
+                    .padding(.top, 66)
+                MascotView(size: 96, animated: true, showHands: true)
             }
             Text(greeting).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.textPrimary)
             Text("Hold Control + Option and tell me what you need.")
@@ -332,7 +337,7 @@ struct ConversationView: View {
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(Capsule().fill(Theme.card))
             }
-            .padding(.top, 16).padding(.bottom, 8)
+            .padding(.top, 44).padding(.bottom, 8)
             .frame(maxWidth: 360)
 
             ScrollViewReader { proxy in
@@ -366,7 +371,7 @@ struct ConversationView: View {
             HStack(alignment: .bottom, spacing: 12) {
                 ZStack(alignment: .topLeading) {
                     TalkButton(title: "Hold Control + Option to talk").padding(.top, 34)
-                    MascotView(tint: Color(red: 0.72, green: 0.64, blue: 0.95), size: 50).offset(x: -6)
+                    MascotView(tint: Color(red: 0.72, green: 0.64, blue: 0.95), size: 54, showHands: true).offset(x: -6, y: -4)
                 }
                 TypeField().frame(width: 170)
             }

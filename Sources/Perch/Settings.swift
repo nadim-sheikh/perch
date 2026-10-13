@@ -39,7 +39,8 @@ enum VoiceEngine: String, CaseIterable, Identifiable {
 
 /// Stores secrets in the macOS Keychain, scoped to this app.
 enum Keychain {
-    private static let service = "dev.openbuddy.keys"
+    static let service = "dev.perch.keys"
+    static let legacyService = "dev.openbuddy.keys"
 
     static func get(_ account: String) -> String {
         let query: [String: Any] = [

@@ -10,9 +10,10 @@ struct AgentAvatar: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(agent.backdrop)
-            MascotView(tint: agent.tint, size: size * 0.62).allowsHitTesting(false)
+            Circle().fill(RadialGradient(colors: [agent.backdrop.mix(with: .white, by: 0.3), agent.backdrop], center: .topLeading, startRadius: 1, endRadius: size))
+            MascotView(tint: agent.tint, size: size * 0.66).allowsHitTesting(false).offset(y: size * 0.03)
         }
+        .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
         .frame(width: size, height: size)
         .overlay(alignment: .bottomTrailing) {
             if working {
@@ -72,7 +73,7 @@ struct AgentChatView: View {
                 .onTapGesture { NSWorkspace.shared.open(agent.folder) }
                 .help("Open \(agent.name)'s folder")
             }
-            .padding(.top, 16).padding(.bottom, 6)
+            .padding(.top, 44).padding(.bottom, 6)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -369,7 +370,7 @@ struct AgentComposer: View {
             HStack(alignment: .bottom, spacing: 12) {
                 ZStack(alignment: .topLeading) {
                     TalkButton(title: "Hold Control + Option to talk").padding(.top, 34)
-                    MascotView(tint: agent.tint, size: 50).offset(x: -6)
+                    MascotView(tint: agent.tint, size: 54, showHands: true).offset(x: -6, y: -4)
                 }
                 HStack(spacing: 8) {
                     Image(systemName: "keyboard").font(.system(size: 12)).foregroundStyle(Theme.textTertiary)

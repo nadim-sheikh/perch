@@ -86,8 +86,7 @@ struct LLMClient {
             req = URLRequest(url: URL(string: endpoint)!)
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             if provider == .openrouter {
-                req.setValue("https://github.com/openbuddy/openbuddy", forHTTPHeaderField: "HTTP-Referer")
-                req.setValue("OpenBuddy", forHTTPHeaderField: "X-Title")
+                req.setValue("Perch", forHTTPHeaderField: "X-Title")
             }
             var content: [[String: Any]] = screens.flatMap { s -> [[String: Any]] in
                 [

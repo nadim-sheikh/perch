@@ -171,7 +171,7 @@ enum StepDescriber {
         default:
             if name.hasPrefix("mcp__") {
                 let parts = name.split(separator: "_", omittingEmptySubsequences: true)
-                let server = parts.count > 1 ? String(parts[1]).replacingOccurrences(of: "openbuddy-", with: "").capitalized : "an app"
+                let server = parts.count > 1 ? String(parts[1]).replacingOccurrences(of: "perch-", with: "").capitalized : "an app"
                 return AgentStep(id: id, kind: .app, present: "Using \(server)", past: "Used \(server)")
             }
             return AgentStep(id: id, kind: .other, present: "Using \(name)", past: "Used \(name)")

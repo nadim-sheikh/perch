@@ -8,8 +8,8 @@ final class NotchModel: ObservableObject {
     static let shared = NotchModel()
 
     enum Presentation: Equatable {
-        case docked, listening, thinking, speaking, agents, peek, textInput, textResponse
-        var isCard: Bool { self == .peek || self == .textInput || self == .textResponse }
+        case docked, listening, thinking, speaking, agents, peek, textInput, textResponse, suggestion
+        var isCard: Bool { self == .peek || self == .textInput || self == .textResponse || self == .suggestion }
     }
 
     @Published var presentation: Presentation = .docked
@@ -21,6 +21,8 @@ final class NotchModel: ObservableObject {
     @Published var responseFinished = false
     @Published var dismissProgress: Double = 1   // countdown ring for the notch answer
     @Published var agentRotation = 0
+    /// Home is open: the notch hands its space to the Home sheet.
+    @Published var homeOpen = false
 
     var notchHeight: CGFloat = 32
     var hardwareNotchWidth: CGFloat = 0
@@ -148,6 +150,7 @@ final class NotchController {
         case .peek: return CGSize(width: 480, height: 400)
         case .textInput: return CGSize(width: 480, height: 150)
         case .textResponse: return CGSize(width: 480, height: 330)
+        case .suggestion: return CGSize(width: 560, height: 140)
         }
     }
 
@@ -158,7 +161,17 @@ final class NotchController {
             .insetBy(dx: -inflate, dy: -inflate)
     }
 
+    private var idleSkip = 0
+
     private func tick() {
+        // Far from the notch with nothing happening: check only a few times a second.
+        let mouseY = NSEvent.mouseLocation.y
+        if model.presentation == .docked, !model.textInputOpen, !model.responseVisible,
+           mouseY < screen.frame.maxY - 120, BuddyState.shared.phase == .idle, AgentManager.shared.running.isEmpty,
+           IntegrationSuggestions.shared.current == nil {
+            idleSkip += 1
+            if idleSkip % 6 != 0 { return }
+        }
         let now = Date()
         let dt = now.timeIntervalSince(lastTick)
         lastTick = now
@@ -176,7 +189,7 @@ final class NotchController {
             hoverStarted = nil
             suppressUntilReentry = false
         }
-        let peekEnabled = UserDefaults.standard.object(forKey: "notchPeek") as? Bool ?? true
+        let peekEnabled = (UserDefaults.standard.object(forKey: "notchPeek") as? Bool ?? true) && !model.homeOpen
         let wantsPeek: Bool = {
             guard peekEnabled, !suppressUntilReentry else { return false }
             if current == .peek {
@@ -214,6 +227,7 @@ final class NotchController {
     private func resolve(wantsPeek: Bool) -> NotchModel.Presentation {
         if model.textInputOpen { return .textInput }
         if model.responseVisible { return .textResponse }
+        if IntegrationSuggestions.shared.current != nil && BuddyState.shared.phase == .idle { return .suggestion }
         switch BuddyState.shared.phase {
         case .listening: return .listening
         case .thinking: return .thinking
@@ -271,6 +285,7 @@ struct NotchRootView: View {
         case .peek: return CGSize(width: 470, height: peekHeight)
         case .textInput: return CGSize(width: 470, height: model.notchHeight + 92)
         case .textResponse: return CGSize(width: 470, height: responseHeight)
+        case .suggestion: return CGSize(width: 550, height: model.notchHeight + 96)
         }
     }
 
@@ -305,6 +320,7 @@ struct NotchRootView: View {
                     case .peek: peek.padding(.horizontal, 26)
                     case .textInput: NotchTextInput().padding(.horizontal, 26)
                     case .textResponse: NotchTextResponse().padding(.horizontal, 26)
+                    case .suggestion: NotchSuggestion().padding(.horizontal, 24)
                     }
                 }
                 .transition(.asymmetric(
@@ -729,5 +745,50 @@ struct CornerGlow: View {
         }
         .allowsHitTesting(false)
         .transition(.opacity.animation(.easeIn(duration: 0.4)))
+    }
+}
+
+/// "Connect GitHub to Perch?" card with example uses and No / Not now / Yes.
+struct NotchSuggestion: View {
+    @EnvironmentObject var model: NotchModel
+    @ObservedObject var suggestions = IntegrationSuggestions.shared
+
+    var body: some View {
+        if let def = suggestions.current {
+            VStack(alignment: .leading, spacing: 10) {
+                Color.clear.frame(height: model.notchHeight - 10)
+                HStack(spacing: 10) {
+                    HStack(spacing: -6) {
+                        RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.16, green: 0.2, blue: 0.32))
+                            .frame(width: 30, height: 30).overlay(MascotView(size: 22))
+                        RoundedRectangle(cornerRadius: 8).fill(Color(hex: def.colorHex) ?? .gray)
+                            .frame(width: 30, height: 30)
+                            .overlay(Image(systemName: def.symbol).font(.system(size: 13, weight: .bold)).foregroundStyle(.white))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.black, lineWidth: 2))
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Connect \(def.name) to Perch?").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                        Text("Use Perch to:").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Button { suggestions.answer(yes: false, never: true) } label: { Label("No", systemImage: "xmark") }
+                        .buttonStyle(ChipStyle())
+                    Button { suggestions.answer(yes: false) } label: { Label("Not now", systemImage: "clock") }
+                        .buttonStyle(ChipStyle())
+                    Button { suggestions.answer(yes: true) } label: { Label("Yes", systemImage: "link") }
+                        .buttonStyle(GlassPillStyle(height: 26))
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(IntegrationSuggestions.useCases[def.id] ?? def.useCases, id: \.self) { u in
+                            Text(u).font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
+                                .padding(.horizontal, 10).frame(height: 24)
+                                .background(Capsule().fill(Color.white.opacity(0.08)))
+                        }
+                    }
+                }
+                .mask(LinearGradient(colors: [.black, .black, .clear], startPoint: .leading, endPoint: .trailing))
+            }
+        }
     }
 }

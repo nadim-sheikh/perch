@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Where agents, skills and connectors live: a visible folder in the user's home.
 enum AgentPaths {
-    static let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("OpenBuddy", isDirectory: true)
+    static let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Perch", isDirectory: true)
     static let agents = root.appendingPathComponent("Agents", isDirectory: true)
     static let memory = root.appendingPathComponent("Memory", isDirectory: true)
 }
@@ -36,7 +36,7 @@ struct BuddyAgent: Codable, Identifiable, Hashable {
     var folder: URL { AgentPaths.agents.appendingPathComponent(id, isDirectory: true) }
     var outputFolder: URL { folder.appendingPathComponent("output", isDirectory: true) }
     var tmpFolder: URL { folder.appendingPathComponent("tmp", isDirectory: true) }
-    var metaFolder: URL { folder.appendingPathComponent(".openbuddy", isDirectory: true) }
+    var metaFolder: URL { folder.appendingPathComponent(".perch", isDirectory: true) }
     var tint: Color { Color(hue: hue, saturation: 0.45, brightness: 0.95) }
     var backdrop: Color { Color(hue: hue, saturation: 0.18, brightness: 1.0) }
 }
@@ -76,7 +76,7 @@ struct AgentTurn: Codable, Identifiable, Equatable {
     var duration: TimeInterval { (finishedAt ?? Date()).timeIntervalSince(startedAt) }
 }
 
-/// The roster of agents, persisted per agent in `.openbuddy/agent.json`.
+/// The roster of agents, persisted per agent in `.perch/agent.json`.
 @MainActor
 final class AgentRoster: ObservableObject {
     static let shared = AgentRoster()
@@ -151,7 +151,7 @@ final class AgentRoster: ObservableObject {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: AgentPaths.agents, includingPropertiesForKeys: nil) else { return }
         agents = dirs.compactMap { dir in
-            let url = dir.appendingPathComponent(".openbuddy/agent.json")
+            let url = dir.appendingPathComponent(".perch/agent.json")
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? JSONDecoder().decode(BuddyAgent.self, from: data)
         }
@@ -162,7 +162,7 @@ final class AgentRoster: ObservableObject {
         """
         # \(a.name)
 
-        You are \(a.name), one of the user's OpenBuddy helpers. Your job: \(a.oneLiner)
+        You are \(a.name), one of the user's Perch helpers. Your job: \(a.oneLiner)
         This folder is your home. Your notes live in this file and everything you make goes here.
         The user comes back to you over time, so keep what you learn.
 

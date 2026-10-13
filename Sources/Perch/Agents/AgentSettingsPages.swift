@@ -16,7 +16,7 @@ struct AgentsSettingsPage: View {
                         ? "Helpers run on Claude Code, which isn't installed yet."
                         : "Helpers run on your own Claude Code at \(cliPath!).") {
                 if cliPath == nil {
-                    Button("Get it") { NSWorkspace.shared.open(URL(string: "https://claude.com/claude-code")!) }
+                    Button("Install…") { NSWorkspace.shared.open(URL(string: "https://www.anthropic.com/claude-code")!) }
                         .buttonStyle(ChipStyle(light: true))
                 } else {
                     Label("Found", systemImage: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(.green)
@@ -29,20 +29,20 @@ struct AgentsSettingsPage: View {
                 .labelsHidden().frame(width: 200)
             }
             if authMode == AgentAuthMode.claudeLogin.rawValue {
-                SettingsRow(title: "Claude login", subtitle: "Opens Terminal so you can sign in to Claude Code.") {
+                SettingsRow(title: "Claude login", subtitle: nil) {
                     Button("Sign in…") { openClaudeLogin() }.buttonStyle(ChipStyle(light: true))
                 }
             }
-            SettingsRow(title: "Model", subtitle: "Leave empty for Claude Code's default. Examples: sonnet, opus, haiku (or an OpenRouter model id).", last: true) {
+            SettingsRow(title: "Model", subtitle: "Empty = default.", last: true) {
                 TextField("default", text: $agentModel).settingsField()
             }
         }
 
         SettingsGroup(title: "Updates") {
-            SettingsRow(title: "Sounds", subtitle: "A pop when a helper starts and a chime when it's done.") {
+            SettingsRow(title: "Sounds", subtitle: nil) {
                 Toggle("", isOn: $sounds).toggleStyle(GlassToggleStyle())
             }
-            SettingsRow(title: "Speak updates", subtitle: "Your buddy reads out a one-line summary when a helper finishes.", last: true) {
+            SettingsRow(title: "Speak updates", subtitle: nil, last: true) {
                 Toggle("", isOn: $speak).toggleStyle(GlassToggleStyle())
             }
         }
@@ -166,7 +166,7 @@ struct IntegrationsSettingsPage: View {
             CustomConnectorCard { showCustom = true }
         }
 
-        Text("Connections are free MCP servers. Browser sign-in happens through Claude Code in a Terminal window; tokens stay in your Keychain. Your helpers use connected apps automatically.")
+        Text("Sign-in opens in Terminal. Tokens stay in your Keychain.")
             .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             .onAppear { store.refreshStatus() }
             .sheet(item: $secretSheet) { def in SecretSheet(def: def) { secretSheet = nil } }

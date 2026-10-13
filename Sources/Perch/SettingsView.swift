@@ -16,7 +16,7 @@ struct SettingsSidebar: View {
                 .buttonStyle(ChipStyle())
                 Text("Settings").font(.system(size: 14, weight: .semibold))
             }
-            .padding(.top, 30).padding(.horizontal, 14).padding(.bottom, 14)
+            .padding(.top, 50).padding(.horizontal, 14).padding(.bottom, 14)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -33,7 +33,7 @@ struct SettingsSidebar: View {
                 }
                 .padding(.horizontal, 8)
             }
-            Text("OpenBuddy \(Bundle.main.shortVersion)")
+            Text("Perch \(Bundle.main.shortVersion)")
                 .font(.system(size: 10)).foregroundStyle(Theme.textTertiary)
                 .padding(14)
         }
@@ -136,27 +136,29 @@ struct SettingsPage: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(section.rawValue).font(.system(size: 18, weight: .bold))
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                    }
                 }
                 content
             }
-            .padding(.horizontal, 22).padding(.top, 34).padding(.bottom, 24)
+            .padding(.horizontal, 22).padding(.top, 54).padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var subtitle: String {
         switch section {
-        case .general: return "How OpenBuddy behaves on your Mac."
-        case .ai: return "Pick the brain behind your buddy. Your keys stay in your Keychain."
-        case .voice: return "How your buddy sounds when it talks back."
-        case .microphone: return "The mic your buddy listens with."
-        case .dictation: return "Type with your voice in any app."
-        case .shortcuts: return "Keys that summon your buddy."
-        case .cursor: return "How your buddy looks next to your pointer."
-        case .permissions: return "What macOS lets OpenBuddy do."
-        case .agents: return "Helpers that work in the background for you."
-        case .integrations: return "Connect the apps your buddy can use."
+        case .general: return ""
+        case .ai: return "Your keys stay in your Keychain."
+        case .voice: return ""
+        case .microphone: return ""
+        case .dictation: return ""
+        case .shortcuts: return ""
+        case .cursor: return ""
+        case .permissions: return ""
+        case .agents: return ""
+        case .integrations: return ""
         }
     }
 
@@ -199,13 +201,13 @@ private struct GeneralPage: View {
 
     var body: some View {
         SettingsGroup(title: "Behavior") {
-            SettingsRow(title: "Show in Dock", subtitle: "Turn off to keep OpenBuddy in the notch and menu bar only.") {
+            SettingsRow(title: "Show in Dock", subtitle: nil) {
                 Toggle("", isOn: $showInDock).toggleStyle(GlassToggleStyle())
             }
-            SettingsRow(title: "Show in screen recordings", subtitle: "Let screen sharing and recording tools capture OpenBuddy.") {
+            SettingsRow(title: "Show in screen recordings", subtitle: nil) {
                 Toggle("", isOn: $showInRecordings).toggleStyle(GlassToggleStyle())
             }
-            SettingsRow(title: "Quick peek on notch hover", subtitle: "Hovering the notch shows your recent chats. Turn off to open Home straight away.", last: true) {
+            SettingsRow(title: "Quick peek on notch hover", subtitle: nil, last: true) {
                 Toggle("", isOn: $notchPeek).toggleStyle(GlassToggleStyle())
             }
         }
@@ -213,13 +215,7 @@ private struct GeneralPage: View {
         .onChange(of: showInRecordings) { _, _ in AppAppearance.apply() }
 
         SettingsGroup(title: "Updates") {
-            SettingsRow(title: "App version", subtitle: "You're on version \(Bundle.main.shortVersion).") {
-                Button("Check on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/openbuddy/openbuddy/releases")!) }
-                    .buttonStyle(ChipStyle(light: true))
-            }
-            SettingsRow(title: "Roadmap", subtitle: "Everything planned for OpenBuddy.", last: true) {
-                Image(systemName: "arrow.up.right").foregroundStyle(Theme.textSecondary)
-            }
+            SettingsRow(title: "Version", subtitle: Bundle.main.shortVersion, last: true) { EmptyView() }
         }
     }
 }
@@ -275,9 +271,9 @@ private struct AIPage: View {
         }
 
         SettingsGroup(title: "API keys") {
-            SettingsRow(title: "Anthropic", subtitle: "console.anthropic.com") { SecureField("sk-ant-…", text: $settings.anthropicKey).settingsField() }
-            SettingsRow(title: "OpenAI", subtitle: "Also used for OpenAI voices") { SecureField("sk-…", text: $settings.openaiKey).settingsField() }
-            SettingsRow(title: "OpenRouter", subtitle: "openrouter.ai/keys", last: true) { SecureField("sk-or-…", text: $settings.openrouterKey).settingsField() }
+            SettingsRow(title: "Anthropic", subtitle: nil) { SecureField("sk-ant-…", text: $settings.anthropicKey).settingsField() }
+            SettingsRow(title: "OpenAI", subtitle: nil) { SecureField("sk-…", text: $settings.openaiKey).settingsField() }
+            SettingsRow(title: "OpenRouter", subtitle: nil, last: true) { SecureField("sk-or-…", text: $settings.openrouterKey).settingsField() }
         }
     }
 
@@ -319,7 +315,7 @@ private struct VoicePage: View {
         }
         if voiceEngine == VoiceEngine.system.rawValue {
             SettingsGroup(title: "macOS voice") {
-                SettingsRow(title: "Voice", subtitle: "Download nicer voices in System Settings → Accessibility → Spoken Content.", last: true) {
+                SettingsRow(title: "Voice", subtitle: nil, last: true) {
                     Picker("", selection: $systemVoiceID) {
                         Text("Default").tag("")
                         ForEach(AVSpeechSynthesisVoice.speechVoices()
@@ -336,10 +332,34 @@ private struct VoicePage: View {
 
 private struct MicrophonePage: View {
     @State private var granted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    @AppStorage("speechEngine") private var engine = SpeechEngine.parakeet.rawValue
+    @State private var parakeet: Parakeet.State = .notLoaded
 
     var body: some View {
+        SettingsGroup(title: "Speech to text") {
+            SettingsRow(title: "Engine", subtitle: engine == SpeechEngine.parakeet.rawValue
+                        ? "NVIDIA Parakeet, runs privately on your Mac." : "Apple's built-in recognizer.") {
+                Picker("", selection: $engine) {
+                    ForEach(SpeechEngine.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 190)
+            }
+            if engine == SpeechEngine.parakeet.rawValue {
+                SettingsRow(title: "Model", subtitle: parakeetText, last: true) {
+                    if case .downloading(let p) = parakeet {
+                        ProgressView(value: p).frame(width: 120)
+                    } else if parakeet != .ready {
+                        Button("Download") { load() }.buttonStyle(ChipStyle(light: true))
+                    } else {
+                        Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(.green)
+                    }
+                }
+            }
+        }
+        .task { parakeet = await Parakeet.shared.state }
+
         SettingsGroup(title: "Input") {
-            SettingsRow(title: "Microphone", subtitle: "OpenBuddy uses your system input device. Change it in System Settings → Sound.") {
+            SettingsRow(title: "Microphone", subtitle: "Perch uses your system input device. Change it in System Settings → Sound.") {
                 Text(AVCaptureDevice.default(for: .audio)?.localizedName ?? "None")
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
             }
@@ -351,6 +371,24 @@ private struct MicrophonePage: View {
                         .buttonStyle(ChipStyle(light: true))
                 }
             }
+        }
+    }
+}
+
+extension MicrophonePage {
+    var parakeetText: String {
+        switch parakeet {
+        case .notLoaded: return "About 220 MB, downloaded once."
+        case .downloading(let p): return "Downloading… \(Int(p * 100))%"
+        case .ready: return "Loaded on the Neural Engine."
+        case .failed(let m): return "Couldn't load: \(m)"
+        }
+    }
+
+    func load() {
+        parakeet = .downloading(0)
+        Task.detached {
+            await Parakeet.shared.load { state in Task { @MainActor in parakeet = state } }
         }
     }
 }
@@ -388,7 +426,7 @@ private struct CursorPage: View {
     var body: some View {
         SettingsGroup(title: "Buddy") {
             SettingsRow(title: "Name") { TextField("", text: $buddyName).settingsField() }
-            SettingsRow(title: "Follow my cursor", subtitle: "Turn off to keep the buddy still until it points at something.", last: true) {
+            SettingsRow(title: "Follow my cursor", subtitle: nil, last: true) {
                 Toggle("", isOn: $followCursor).toggleStyle(GlassToggleStyle())
             }
         }
@@ -431,7 +469,7 @@ private struct PermissionsPage: View {
         }
         HStack {
             Button("Refresh") { permissions = .current() }.buttonStyle(ChipStyle())
-            Text("After granting Screen Recording or Accessibility, quit and reopen OpenBuddy.")
+            Text("After granting Screen Recording or Accessibility, quit and reopen Perch.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
         }
         .onAppear { permissions = .current() }

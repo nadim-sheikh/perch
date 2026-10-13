@@ -62,6 +62,18 @@ struct BuddyOverlayView: View {
     private var color: Color { Color(hex: cursorColorHex) ?? .blue }
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            if !state.marks.isEmpty {
+                MarksLayer(screenFrame: screenFrame, marks: state.marks, color: color)
+                    .transition(.opacity)
+            }
+            cursorLayer
+        }
+        .frame(width: screenFrame.width, height: screenFrame.height, alignment: .topLeading)
+        .ignoresSafeArea()
+    }
+
+    private var cursorLayer: some View {
         GeometryReader { _ in
             if screenFrame.insetBy(dx: -40, dy: -40).contains(state.position) {
                 let local = CGPoint(x: state.position.x - screenFrame.minX, y: screenFrame.maxY - state.position.y)

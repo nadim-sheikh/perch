@@ -1,4 +1,7 @@
 import AppKit
+import os
+
+let perchLog = Logger(subsystem: "dev.perch.app", category: "companion")
 
 /// The brain: hotkey down → listen, hotkey up → look at the screen, ask the
 /// model, show and speak the answer, and point at things it mentions.
@@ -12,6 +15,7 @@ final class Companion {
     private let speaker = Speaker()
     private var currentTask: Task<Void, Never>?
     private var hideBubbleWork: DispatchWorkItem?
+    private var listenStart: Task<Void, Never>?
 
     init() {
         speech.onLevel = { [weak self] level in self?.state.audioLevel = level }
@@ -25,18 +29,21 @@ final class Companion {
 
     func beginListening() {
         interrupt()
-        do {
-            try speech.start()
-            state.phase = .listening
-            state.bubbleText = ""
-        } catch {
-            show(error: "Microphone unavailable: \(error.localizedDescription)")
+        state.phase = .listening
+        state.bubbleText = ""
+        listenStart = Task {
+            do {
+                try await speech.start()
+            } catch {
+                show(error: "Microphone unavailable: \(error.localizedDescription)")
+            }
         }
     }
 
     func endListening() {
         guard state.phase == .listening else { return }
         currentTask = Task {
+            await listenStart?.value
             let transcript = await speech.stop()
             guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else {
                 state.phase = .idle
@@ -97,9 +104,11 @@ final class Companion {
         defer { store.streamingText = nil }
 
         var screens: [CapturedScreen] = []
+        perchLog.notice("ask: screen permission \(ScreenCapture.hasPermission())")
         if ScreenCapture.hasPermission() {
             screens = (try? await ScreenCapture.captureAll()) ?? []
         }
+        perchLog.notice("ask: captured \(screens.count) screens, provider \(settings.provider.rawValue) model \(settings.activeModel) key \(settings.activeKey.isEmpty ? "missing" : "set")")
 
         let client = LLMClient(provider: settings.provider, apiKey: settings.activeKey, model: settings.activeModel)
         var full = ""
@@ -111,10 +120,11 @@ final class Companion {
                 screens: screens
             )
             for try await chunk in stream {
-                if Task.isCancelled { return }
+                if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
+                if full.isEmpty { perchLog.notice("ask: first chunk") }
                 full += chunk
                 state.phase = .responding
-                let visible = Handoff.strip(Pointing.stripTags(full))
+                let visible = MarkTags.stripAll(full)
                 if inNotch {
                     if notch.responseText.isEmpty { NSSound(named: "Tink")?.play() }
                     notch.responseText = visible
@@ -124,6 +134,7 @@ final class Companion {
                 store.streamingText = visible
             }
         } catch {
+            perchLog.error("ask: error \(error.localizedDescription)")
             if !Task.isCancelled {
                 if inNotch { notch.responseText = "⚠️ " + error.localizedDescription; notch.responseFinished = true }
                 show(error: error.localizedDescription)
@@ -132,7 +143,7 @@ final class Companion {
             return
         }
 
-        let spoken = Handoff.strip(Pointing.stripTags(full))
+        let spoken = MarkTags.stripAll(full)
         store.append(Message(role: .assistant, text: spoken), to: conversationID)
 
         if let handoff = Handoff.parse(full) {
@@ -140,8 +151,12 @@ final class Companion {
             Handoff.perform(handoff, screenshot: cursorScreen)
         }
 
+        let marks = MarkTags.parse(full, screens: screens)
+        if !marks.isEmpty { state.show(marks: marks) }
         if let target = Pointing.firstTarget(in: full), let screen = screens.first(where: { $0.index == target.screen }) {
             state.point(at: screen.globalPoint(fromImagePoint: target.point), label: target.label)
+        } else if let first = marks.first {
+            state.point(at: first.anchor, label: first.label)
         }
 
         if inNotch {
@@ -185,12 +200,15 @@ enum Prompts {
         - No markdown, bullet lists, headings or code fences. Plain spoken English.
         - Be concrete about what is on their screen. If you can't see something, say so.
 
-        Pointing: when it helps to show the user where something is (a button, menu, field, icon), \
-        add exactly one tag at the very end of your reply in this format:
-        [POINT:x,y:screenN:short label]
-        where x,y are pixel coordinates of the element's centre in that screenshot (origin at the top-left), \
-        N is the screen number, and the label is 1-3 words. Only point at things you can actually see. \
-        Never mention the tag or coordinates in your sentences.
+        Showing things on screen: when the user asks where something is or how to do something, show them. \
+        At the very end of your reply add tags (never mention them):
+        [POINT:x,y:screenN:short label]  the buddy flies to and points at the element to click
+        [HIGHLIGHT:x,y,w,h:screenN:label]  draws a box around an area (x,y = top-left corner)
+        [CIRCLE:x,y,r:screenN:label]  circles a small target
+        [ARROW:x1,y1,x2,y2:screenN:label]  draws an arrow from one place to another
+        Coordinates are pixels in that screenshot (origin top-left). Be precise: aim for the centre of the \
+        element. For "where do I click" use POINT plus a HIGHLIGHT around the same element. For multi-step \
+        tasks, show only the next step and tell them you'll guide them after they click. Only mark things you can see.
         """
     }
 }

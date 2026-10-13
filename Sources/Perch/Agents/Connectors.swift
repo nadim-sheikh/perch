@@ -112,7 +112,7 @@ final class ConnectorStore: ObservableObject {
                     "claude mcp add -s local -t http \(def.id) \(url)",
                     "echo; echo 'Signing in to \(def.name)… finish in your browser.'",
                     "claude mcp login \(def.id)",
-                    "echo; echo 'Done! You can close this window and go back to OpenBuddy.'",
+                    "echo; echo 'Done! You can close this window and go back to Perch.'",
                 ])
             }
         default:
@@ -208,7 +208,7 @@ final class ConnectorStore: ObservableObject {
     func promptSection() -> String {
         guard !enabled.isEmpty else { return "" }
         let names = enabled.map(\.name).joined(separator: ", ")
-        return "\n\nCONNECTED APPS: \(names). Use their tools for the user's own data. If one fails because it isn't signed in, tell the user to reconnect it in OpenBuddy → Settings → Integrations. Never run sign-in commands yourself."
+        return "\n\nCONNECTED APPS: \(names). Use their tools for the user's own data. If one fails because it isn't signed in, tell the user to reconnect it in Perch → Settings → Integrations. Never run sign-in commands yourself."
     }
 
     var allowedToolPatterns: [String] { enabled.map { "mcp__\($0.id)" } }

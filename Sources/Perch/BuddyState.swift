@@ -27,6 +27,17 @@ final class BuddyState: ObservableObject {
     @Published var rotation: Double = 0
     @Published var flightScale: CGFloat = 1
     @Published var callout: String?
+    /// Highlights, circles and arrows currently drawn on screen.
+    @Published var marks: [ScreenMark] = []
+    private var marksClear: DispatchWorkItem?
+
+    func show(marks new: [ScreenMark], for seconds: TimeInterval = 7) {
+        marksClear?.cancel()
+        marks = new
+        let work = DispatchWorkItem { [weak self] in withAnimation(.easeOut(duration: 0.5)) { self?.marks = [] } }
+        marksClear = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
 
     var isPointing: Bool { navigation != .following }
 
