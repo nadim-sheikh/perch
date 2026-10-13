@@ -22,6 +22,15 @@ struct Conversation: Identifiable, Codable, Equatable {
 final class ConversationStore: ObservableObject {
     static let shared = ConversationStore()
 
+    /// Oldest chats, and the oldest messages in a long chat, are dropped past these.
+    static let maxConversations = 200
+    static let maxMessages = 300
+    /// Writes are batched, then done off the main thread in order.
+    private static let saveDelay: UInt64 = 1_000_000_000
+    private static let ioQueue = DispatchQueue(label: "dev.perch.conversations.save", qos: .utility)
+    private var saveTask: Task<Void, Never>?
+    private var dirty = false
+
     @Published private(set) var conversations: [Conversation] = []
     @Published var selectedID: UUID?
     /// Text of the reply currently streaming in (not yet saved).
@@ -38,6 +47,7 @@ final class ConversationStore: ObservableObject {
         if let data = try? Data(contentsOf: fileURL),
            let saved = try? JSONDecoder().decode([Conversation].self, from: data) {
             conversations = saved.sorted { $0.updated > $1.updated }
+            trim()
         }
     }
 
@@ -54,6 +64,7 @@ final class ConversationStore: ObservableObject {
         let c = Conversation(title: "New chat")
         conversations.insert(c, at: 0)
         selectedID = c.id
+        trim()
         save()
         return c.id
     }
@@ -67,6 +78,7 @@ final class ConversationStore: ObservableObject {
         }
         let c = conversations.remove(at: i)
         conversations.insert(c, at: 0)
+        trim()
         save()
     }
 
@@ -87,9 +99,45 @@ final class ConversationStore: ObservableObject {
         save()
     }
 
+    /// Keeps the newest chats (and the selected one) and the newest messages in each.
+    private func trim() {
+        for i in conversations.indices where conversations[i].messages.count > Self.maxMessages {
+            conversations[i].messages.removeFirst(conversations[i].messages.count - Self.maxMessages)
+        }
+        guard conversations.count > Self.maxConversations else { return }
+        let keep = Set(conversations.prefix(Self.maxConversations).map(\.id)).union(selectedID.map { [$0] } ?? [])
+        conversations.removeAll { !keep.contains($0.id) }
+    }
+
+    /// Saves shortly after the last change, so a streamed answer doesn't rewrite the file over and over.
     private func save() {
+        dirty = true
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.saveDelay)
+            guard !Task.isCancelled, let self else { return }
+            self.saveTask = nil
+            self.dirty = false
+            let snapshot = self.conversations
+            let url = self.fileURL
+            Self.ioQueue.async { Self.write(snapshot, to: url) }
+        }
+    }
+
+    /// Writes any unsaved change now and waits for it. Call when Perch quits.
+    func flush() {
+        saveTask?.cancel()
+        saveTask = nil
+        let snapshot = dirty ? conversations : nil
+        dirty = false
+        let url = fileURL
+        // Runs after any write already queued, so the newest data lands last.
+        Self.ioQueue.sync { if let snapshot { Self.write(snapshot, to: url) } }
+    }
+
+    nonisolated private static func write(_ conversations: [Conversation], to url: URL) {
         if let data = try? JSONEncoder().encode(conversations) {
-            try? data.write(to: fileURL, options: .atomic)
+            try? data.write(to: url, options: .atomic)
         }
     }
 

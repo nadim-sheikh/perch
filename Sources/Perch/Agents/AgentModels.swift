@@ -11,7 +11,7 @@ enum AgentPaths {
 enum AgentAccessLevel: String, Codable, CaseIterable, Identifiable {
     case askFirst, fullAccess
     var id: String { rawValue }
-    var title: String { self == .askFirst ? "Safe (recommended)" : "Full access" }
+    var title: String { self == .askFirst ? "Safe" : "Full access" }
     var detail: String {
         self == .askFirst
             ? "Can edit files in its folder, browse the web and run common dev tools. Riskier commands are blocked."
@@ -28,10 +28,14 @@ struct BuddyAgent: Codable, Identifiable, Hashable {
     var hue: Double
     var suggestedAsks: [String] = []
     var sessionID: String?
-    var model: String?
+    /// Kept in `AgentAccessStore`, never in agent.json, which the helper itself can edit.
     var accessLevel: AgentAccessLevel = .askFirst
     var createdAt = Date()
     var archived = false
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, role, oneLiner, hue, suggestedAsks, sessionID, createdAt, archived
+    }
 
     var folder: URL { AgentPaths.agents.appendingPathComponent(id, isDirectory: true) }
     var outputFolder: URL { folder.appendingPathComponent("output", isDirectory: true) }
@@ -53,7 +57,7 @@ struct AgentStep: Codable, Identifiable, Equatable {
     var isError = false
 }
 
-enum AgentTurnState: String, Codable { case working, finished, failed, stopped }
+enum AgentTurnState: String, Codable { case queued, working, finished, failed, stopped }
 
 /// One request to an agent and everything that happened while doing it.
 struct AgentTurn: Codable, Identifiable, Equatable {
@@ -72,6 +76,12 @@ struct AgentTurn: Codable, Identifiable, Equatable {
     var artifacts: [String] = []
     var error: String?
     var costUSD: Double?
+    /// Extra instructions sent with the prompt (e.g. a squad's split), reused by Retry.
+    var context: String?
+    /// The request came with a screenshot.
+    var hadScreenshot: Bool?
+    /// It stopped at the step limit; Continue picks up where it left off.
+    var canContinue: Bool?
 
     var duration: TimeInterval { (finishedAt ?? Date()).timeIntervalSince(startedAt) }
 }
@@ -111,10 +121,6 @@ final class AgentRoster: ObservableObject {
         if !fm.fileExists(atPath: notes.path) {
             try Self.notesTemplate(agent).write(to: notes, atomically: true, encoding: .utf8)
         }
-        let claudeMD = agent.folder.appendingPathComponent("CLAUDE.md")
-        if !fm.fileExists(atPath: claudeMD.path) {
-            try "@AGENTS.md\n".write(to: claudeMD, atomically: true, encoding: .utf8)
-        }
         save(agent)
         if let i = agents.firstIndex(where: { $0.id == agent.id }) { agents[i] = agent } else { agents.append(agent) }
         return agent
@@ -139,16 +145,23 @@ final class AgentRoster: ObservableObject {
     func delete(_ slug: String) {
         guard let a = agent(slug) else { return }
         try? FileManager.default.trashItem(at: a.folder, resultingItemURL: nil)
+        AgentAccessStore.remove(slug)
         agents.removeAll { $0.id == slug }
     }
 
+    /// Archiving stops the helper's work and clears its badge.
     func setArchived(_ slug: String, _ archived: Bool) {
         guard var a = agent(slug) else { return }
+        if archived {
+            AgentManager.shared.stop(slug)
+            AgentManager.shared.clearUnread(slug)
+        }
         a.archived = archived
         update(a)
     }
 
     private func save(_ agent: BuddyAgent) {
+        AgentAccessStore.set(agent.accessLevel, for: agent.id)
         let url = agent.metaFolder.appendingPathComponent("agent.json")
         try? FileManager.default.createDirectory(at: agent.metaFolder, withIntermediateDirectories: true)
         if let data = try? JSONEncoder.pretty.encode(agent) { try? data.write(to: url, options: .atomic) }
@@ -157,12 +170,22 @@ final class AgentRoster: ObservableObject {
     private func load() {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: AgentPaths.agents, includingPropertiesForKeys: nil) else { return }
+        // Access levels used to live in agent.json. Move them out once; after that the file's value is ignored.
+        struct LegacyAccess: Decodable { var accessLevel: AgentAccessLevel? }
+        let migrate = !AgentAccessStore.migrated
         agents = dirs.compactMap { dir in
             let url = dir.appendingPathComponent(".perch/agent.json")
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? JSONDecoder().decode(BuddyAgent.self, from: data)
+            guard let data = try? Data(contentsOf: url), var agent = try? JSONDecoder().decode(BuddyAgent.self, from: data) else { return nil }
+            if migrate {
+                agent.accessLevel = (try? JSONDecoder().decode(LegacyAccess.self, from: data))?.accessLevel ?? .askFirst
+                save(agent)
+            } else {
+                agent.accessLevel = AgentAccessStore.level(for: agent.id)
+            }
+            return agent
         }
         .sorted { $0.createdAt < $1.createdAt }
+        AgentAccessStore.migrated = true
     }
 
     private static func notesTemplate(_ a: BuddyAgent) -> String {
@@ -187,6 +210,25 @@ final class AgentRoster: ObservableObject {
 
         """
     }
+}
+
+/// Each helper's access level, kept in Perch's preferences where helpers' file and shell tools can't change it.
+enum AgentAccessStore {
+    private static let migratedKey = "agentAccessMigrated"
+    private static func key(_ slug: String) -> String { "agentAccess.\(slug)" }
+
+    static var migrated: Bool {
+        get { UserDefaults.standard.bool(forKey: migratedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: migratedKey) }
+    }
+
+    static func level(for slug: String) -> AgentAccessLevel {
+        UserDefaults.standard.string(forKey: key(slug)).flatMap(AgentAccessLevel.init(rawValue:)) ?? .askFirst
+    }
+
+    static func set(_ level: AgentAccessLevel, for slug: String) { UserDefaults.standard.set(level.rawValue, forKey: key(slug)) }
+
+    static func remove(_ slug: String) { UserDefaults.standard.removeObject(forKey: key(slug)) }
 }
 
 extension JSONEncoder {

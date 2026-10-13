@@ -17,34 +17,62 @@ final class TextTools {
     private var dictating = false
     private var busyFixing = false
     private var hideWork: DispatchWorkItem?
+    private var dictationStart: Task<Bool, Never>?
+    private var dictationToken = 0
+    /// Who may change the buddy's phase and bubble: a TextTools job only touches them while
+    /// the token it claimed is still current. Companion bumps it via `yieldBubble()`.
+    private var owner = 0
+
+    /// Companion is taking over the bubble: drop any pending hide, and stop running jobs
+    /// from resetting the phase or bubble (they still finish their work).
+    func yieldBubble() {
+        owner += 1
+        hideWork?.cancel()
+        hideWork = nil
+    }
+
+    private func claimBubble() -> Int {
+        yieldBubble()
+        return owner
+    }
 
     // MARK: Dictation (hold to speak, inserts at the caret)
 
     func startDictation() {
         guard !dictating, !busyFixing else { return }
+        // Stop Perch talking first, or the mic types its voice into the field.
+        Companion.shared.interrupt()
         dictating = true
-        hideWork?.cancel()
+        let token = claimBubble()
+        dictationToken = token
         speech.onLevel = { [weak self] l in self?.state.audioLevel = l }
         speech.onPartial = { [weak self] t in
-            guard self?.dictating == true else { return }
-            self.map { $0.state.bubbleText = t.isEmpty ? "Listening…" : t }
+            guard let self, self.dictating, self.owner == token else { return }
+            self.state.bubbleText = t.isEmpty ? "Listening…" : t
         }
         state.phase = .listening
         state.bubbleText = "Listening…"
-        Task {
-            do { try await speech.start() }
-            catch { flash("Couldn't reach the mic.") }
+        dictationStart = Task {
+            do { try await speech.start(); return true }
+            catch { flash("Couldn't reach the mic.", token: token); return false }
         }
     }
 
     func endDictation() {
         guard dictating else { return }
         dictating = false
+        let start = dictationStart
+        dictationStart = nil
+        let token = dictationToken
         Task {
-            state.phase = .thinking
+            // Let the mic finish starting so stopping really turns it off; a failure was already shown.
+            guard await start?.value ?? false else { return }
+            if owner == token { state.phase = .thinking }
             let text = await speech.stop()
-            state.phase = .idle
-            state.bubbleText = ""
+            if owner == token {
+                state.phase = .idle
+                state.bubbleText = ""
+            }
             let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else { return }
             // Type the words where the user's caret is, in whatever app is in front.
@@ -57,7 +85,7 @@ final class TextTools {
     func fixFocusedText() {
         DebugLog.write("fixFocusedText fired")
         guard !busyFixing, !dictating else { DebugLog.write("busy/dictating, skip"); return }
-        guard AppSettings.shared.hasAnyKey else { DebugLog.write("no api key"); flash("Add an API key in Settings first."); return }
+        guard AppSettings.shared.hasKey else { DebugLog.write("no api key"); flash("Add an API key in Settings first."); return }
         guard let el = Self.focusedTextElement() else { DebugLog.write("no focused text element"); flash("Click into a text box first."); return }
 
         let selected = Self.string(el, kAXSelectedTextAttribute) ?? ""
@@ -70,19 +98,27 @@ final class TextTools {
         guard source.count <= 4000 else { flash("That's a lot. Select the part you want fixed."); return }
 
         busyFixing = true
+        let token = claimBubble()
         state.phase = .thinking
         state.bubbleText = "Fixing…"
         Task {
-            let fixed = await Self.correct(source)
-            state.phase = .idle
+            let fixed: String?
+            do {
+                fixed = try await Self.correct(source)
+            } catch {
+                busyFixing = false
+                DebugLog.write("fix failed: \(error.localizedDescription)")
+                flash("Couldn't fix that. " + AgentEngineError.friendly(error), token: token, seconds: 6)
+                return
+            }
             busyFixing = false
             guard let fixed, fixed != source else {
-                flash(fixed == nil ? "Couldn't fix that one." : "Looks good already.")
+                flash(fixed == nil ? "Couldn't fix that one." : "Looks good already.", token: token)
                 return
             }
             DebugLog.write("replacing; fixedLen=\(fixed.count)")
             replace(in: el, hadSelection: hasSelection, with: fixed)
-            flash("Fixed it.")
+            flash("Fixed it.", token: token)
         }
     }
 
@@ -103,15 +139,21 @@ final class TextTools {
 
     // MARK: Helpers
 
-    private func flash(_ message: String) {
+    /// Shows a short message, then clears it. `token` is the job's claim on the bubble
+    /// (a new claim when omitted); nothing happens once Companion has taken over.
+    private func flash(_ message: String, token: Int? = nil, seconds: TimeInterval = 2.2) {
+        let token = token ?? claimBubble()
+        guard token == owner else { return }
+        state.phase = .idle
         state.bubbleText = message
         hideWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            withAnimation { self?.state.bubbleText = "" }
-            self?.state.phase = .idle
+            guard let self, self.owner == token else { return }
+            withAnimation { self.state.bubbleText = "" }
+            self.state.phase = .idle
         }
         hideWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: w)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: w)
     }
 
     private static func focusedTextElement() -> AXUIElement? {
@@ -133,18 +175,17 @@ final class TextTools {
         return v as? String
     }
 
-    private static func correct(_ text: String) async -> String? {
-        let s = AppSettings.shared
-        let client = LLMClient(provider: s.provider, apiKey: s.activeKey, model: s.replyModel)
+    /// The corrected text, or nil for an empty reply. Throws unless the reply arrived complete,
+    /// so a cut-off or failed stream never overwrites the user's text.
+    private static func correct(_ text: String) async throws -> String? {
+        let client = LLMClient()
         let system = """
         You are a precise copy editor. Fix only spelling, grammar and obvious typos in the user's text. \
         Keep the original meaning, tone, wording choices, language, capitalization style and line breaks. \
         Do not rephrase, translate, add, remove or explain anything. Reply with ONLY the corrected text, nothing else.
         """
         var out = ""
-        do {
-            for try await chunk in client.stream(system: system, history: [], prompt: text, screens: []) { out += chunk }
-        } catch { return nil }
+        for try await chunk in client.stream(system: system, history: [], prompt: text, screens: []) { out += chunk }
         let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

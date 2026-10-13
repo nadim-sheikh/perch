@@ -41,33 +41,53 @@ enum ComputerControl {
     }
 
     static func scroll(at p: CGPoint, dx: Int32, dy: Int32) {
-        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: quartz(p), mouseButton: .left)?.post(tap: .cghidEventTap)
-        CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)?.post(tap: .cghidEventTap)
+        let q = quartz(p)
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: q, mouseButton: .left)?.post(tap: .cghidEventTap)
+        // Like click: let the move land first, and pin the wheel event to the point too.
+        usleep(30_000)
+        let e = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
+        e?.location = q
+        e?.post(tap: .cghidEventTap)
     }
 
     // MARK: Keyboard
 
+    /// Types text into the focused field. Line breaks press Return; emoji are never split.
     static func type(_ text: String) {
-        let chars = Array(text.utf16)
-        var i = 0
-        while i < chars.count {
-            let chunk = Array(chars[i..<min(i + 16, chars.count)])
-            for keyDown in [true, false] {
-                let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: keyDown)
-                e?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-                e?.post(tap: .cghidEventTap)
+        for (n, line) in text.components(separatedBy: "\n").enumerated() {
+            if n > 0 { key("return") }
+            var chunk: [UniChar] = []
+            func send() {
+                guard !chunk.isEmpty else { return }
+                for keyDown in [true, false] {
+                    let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: keyDown)
+                    e?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                    e?.post(tap: .cghidEventTap)
+                }
+                usleep(12_000)
+                chunk = []
             }
-            usleep(12_000)
-            i += 16
+            for ch in line {
+                let units = Array(String(ch).utf16)
+                if chunk.count + units.count > 16 { send() }
+                chunk += units
+            }
+            send()
         }
     }
 
-    /// Presses a combo like "cmd+shift+s", "return", "space", "left".
+    /// Presses a combo like "cmd+shift+s", "return", "space", "left", "cmd++" / "cmd+plus", "cmd+minus".
     @discardableResult
     static func key(_ combo: String) -> Bool {
         var flags: CGEventFlags = []
         var keyName = ""
-        for part in combo.lowercased().split(separator: "+").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+        var spec = combo.lowercased().trimmingCharacters(in: .whitespaces)
+        // "+" is both the separator and a key: a trailing "++" (or a lone "+") means the plus key.
+        if spec == "+" || spec.hasSuffix("++") {
+            keyName = "+"
+            spec = String(spec.dropLast(spec == "+" ? 1 : 2))
+        }
+        for part in spec.split(separator: "+").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             switch part {
             case "cmd", "command", "⌘": flags.insert(.maskCommand)
             case "shift", "⇧": flags.insert(.maskShift)
@@ -77,6 +97,8 @@ enum ComputerControl {
             default: keyName = part
             }
         }
+        // Plus is Shift + "=" on the keyboard.
+        if keyName == "+" || keyName == "plus" { keyName = "="; flags.insert(.maskShift) }
         guard let code = keyCodes[keyName] else { return false }
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
@@ -94,6 +116,7 @@ enum ComputerControl {
             "7": 26, "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35, "l": 37, "j": 38,
             "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46, ".": 47, "`": 50,
             "return": 36, "enter": 36, "tab": 48, "space": 49, "delete": 51, "backspace": 51, "escape": 53, "esc": 53,
+            "minus": 27, "equals": 24,
             "forwarddelete": 117, "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
             "left": 123, "right": 124, "down": 125, "up": 126,
         ]
@@ -104,10 +127,10 @@ enum ComputerControl {
 
     // MARK: Apps
 
-    /// Opens an app by (fuzzy) name. Returns the app name actually opened.
-    static func openApp(_ name: String) async -> String? {
+    /// Finds an installed app by (fuzzy) name. `minScore` 80 accepts only exact or prefix matches.
+    static func appURL(named name: String, minScore: Int = 1) -> URL? {
         let wanted = name.lowercased().replacingOccurrences(of: ".app", with: "")
-        let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities",
+        let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/System/Library/CoreServices",
                     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
         var candidates: [URL] = []
         for dir in dirs {
@@ -129,11 +152,7 @@ enum ComputerControl {
             let words = wanted.split(separator: " ")
             return words.allSatisfy { n.contains($0) } ? 50 : 0
         }
-        guard let best = candidates.map({ ($0, score($0)) }).filter({ $0.1 > 0 }).max(by: { $0.1 < $1.1 })?.0 else { return nil }
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        _ = try? await NSWorkspace.shared.openApplication(at: best, configuration: config)
-        return best.deletingPathExtension().lastPathComponent
+        return candidates.map({ ($0, score($0)) }).filter({ $0.1 >= minScore }).max(by: { $0.1 < $1.1 })?.0
     }
 
     static func openFile(_ path: String, withApp app: String?) async -> Bool {
@@ -151,13 +170,6 @@ enum ComputerControl {
         NSWorkspace.shared.runningApplications.first { $0.localizedName?.lowercased().contains(name.lowercased()) == true }?.bundleURL
     }
 
-    static func runAppleScript(_ source: String) -> String {
-        var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { return "Error: \(error[NSAppleScript.errorMessage] ?? error)" }
-        return result?.stringValue ?? "ok"
-    }
-
     // MARK: Accessibility
 
     struct UIElement {
@@ -168,22 +180,45 @@ enum ComputerControl {
         let element: AXUIElement
     }
 
-    /// Clickable / readable elements in the frontmost app's focused window (+ menu bar).
+    /// Clickable / readable elements in the frontmost app's focused window, then its menu bar
+    /// (the top-level menus, plus the items of a menu that is open).
     static func uiElements(limit: Int = 150) -> [UIElement] {
         guard let app = NSWorkspace.shared.frontmostApplication else { return [] }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        var roots: [AXUIElement] = []
-        if let w = attr(axApp, kAXFocusedWindowAttribute) { roots.append(w as! AXUIElement) }
+        // A busy or hung app must not freeze Perch for seconds per element.
+        AXUIElementSetMessagingTimeout(axApp, 0.5)
+        enableAccessibilityTree(of: app, axApp)
+
+        var menuRoots: [AXUIElement] = []
+        if let bar = attr(axApp, kAXMenuBarAttribute) {
+            for item in attr(bar as! AXUIElement, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+                menuRoots.append(item)
+                // Only an open menu's items are on screen; closed ones have no usable frames.
+                if attr(item, kAXSelectedAttribute) as? Bool == true { menuRoots.append(contentsOf: children(of: item)) }
+            }
+        }
         var out: [UIElement] = []
-        let interesting: Set<String> = ["AXButton", "AXMenuButton", "AXPopUpButton", "AXCheckBox", "AXRadioButton", "AXTextField",
-                                        "AXTextArea", "AXLink", "AXMenuItem", "AXTab", "AXSlider", "AXComboBox", "AXCell", "AXStaticText", "AXImage"]
+        if let w = attr(axApp, kAXFocusedWindowAttribute) {
+            collect(from: [w as! AXUIElement], into: &out, limit: max(limit - menuRoots.count, limit / 2), maxVisits: 4000)
+        }
+        collect(from: menuRoots, into: &out, limit: limit, maxVisits: 1000)
+        return out
+    }
+
+    private static let interestingRoles: Set<String> = [
+        "AXButton", "AXMenuButton", "AXPopUpButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXTextArea", "AXLink",
+        "AXMenuBarItem", "AXMenuItem", "AXTab", "AXSlider", "AXComboBox", "AXCell", "AXStaticText", "AXImage",
+    ]
+
+    /// Breadth-first walk from `roots`, appending readable elements until `limit` is reached.
+    private static func collect(from roots: [AXUIElement], into out: inout [UIElement], limit: Int, maxVisits: Int) {
         var queue = roots
-        var visited = 0
-        while !queue.isEmpty, out.count < limit, visited < 4000 {
-            let el = queue.removeFirst()
-            visited += 1
+        var head = 0
+        while head < queue.count, out.count < limit, head < maxVisits {
+            let el = queue[head]
+            head += 1
             let role = attr(el, kAXRoleAttribute) as? String ?? ""
-            if interesting.contains(role), let frame = frame(of: el), frame.width > 2, frame.height > 2 {
+            if interestingRoles.contains(role), let frame = frame(of: el), frame.width > 2, frame.height > 2 {
                 let title = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXHelpAttribute]
                     .compactMap { attr(el, $0) as? String }.first { !$0.isEmpty } ?? ""
                 if !(role == "AXStaticText" && title.isEmpty) && !(role == "AXImage" && title.isEmpty) {
@@ -191,9 +226,30 @@ enum ComputerControl {
                                          title: String(title.prefix(60)), frame: frame, element: el))
                 }
             }
-            if let children = attr(el, kAXChildrenAttribute) as? [AXUIElement] { queue.append(contentsOf: children) }
+            // Menu bar items are listed on their own; don't wander into every closed menu.
+            if role != "AXMenuBarItem" { queue.append(contentsOf: children(of: el)) }
         }
-        return out
+    }
+
+    private static func children(of el: AXUIElement) -> [AXUIElement] {
+        attr(el, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    }
+
+    /// Apps whose accessibility tree we already switched on (keyed by pid).
+    private static var enabledTrees: Set<pid_t> = []
+
+    /// Chromium and Electron apps (Chrome, Slack, VS Code…) only expose their page content once
+    /// asked to. Other apps ignore the attribute. The tree is built asynchronously, so wait a moment
+    /// the first time.
+    private static func enableAccessibilityTree(of app: NSRunningApplication, _ axApp: AXUIElement) {
+        guard !enabledTrees.contains(app.processIdentifier) else { return }
+        enabledTrees.insert(app.processIdentifier)
+        var changed = AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
+        // Chrome only honours the older VoiceOver flag; it changes window animations elsewhere, so keep it to Chrome.
+        if app.bundleIdentifier?.hasPrefix("com.google.Chrome") == true {
+            changed = AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) == .success || changed
+        }
+        if changed { usleep(250_000) }
     }
 
     static func press(_ el: AXUIElement) -> Bool {
@@ -205,11 +261,11 @@ enum ComputerControl {
         return AXUIElementCopyAttributeValue(el, name as CFString, &v) == .success ? v : nil
     }
 
-    private static func frame(of el: AXUIElement) -> CGRect? {
+    /// An element's current frame in global AppKit coordinates, or nil when it's gone.
+    static func frame(of el: AXUIElement) -> CGRect? {
         guard let posV = attr(el, kAXPositionAttribute), let sizeV = attr(el, kAXSizeAttribute) else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero
-        AXValueGetValue(posV as! AXValue, .cgPoint, &pos)
-        AXValueGetValue(sizeV as! AXValue, .cgSize, &size)
+        guard AXValueGetValue(posV as! AXValue, .cgPoint, &pos), AXValueGetValue(sizeV as! AXValue, .cgSize, &size) else { return nil }
         // AX uses top-left global coordinates; convert to AppKit.
         let mainHeight = NSScreen.screens.first?.frame.height ?? 0
         return CGRect(x: pos.x, y: mainHeight - pos.y - size.height, width: size.width, height: size.height)

@@ -57,9 +57,10 @@ final class IntegrationSuggestions: ObservableObject {
         let bundle = app.bundleIdentifier ?? ""
         for (id, sig) in signals {
             let hit = sig.bundles.contains(bundle) || sig.titles.contains { title.localizedCaseInsensitiveContains($0) }
-            guard hit else { continue }
+            // Only offer apps helpers can actually use (not ones that need a browser sign-in).
+            guard hit, let def = ConnectorCatalog.all.first(where: { $0.id == id }), def.usableByAgents else { continue }
             dwell[id, default: 0] += 2
-            if dwell[id]! >= dwellNeeded, shouldAsk(id), let def = ConnectorCatalog.all.first(where: { $0.id == id }) {
+            if dwell[id]! >= dwellNeeded, shouldAsk(id) {
                 dwell[id] = 0
                 defaults.set(Date(), forKey: "suggest.lastAsked.\(id)")
                 defaults.set(Date(), forKey: "suggest.lastAskedAny")
@@ -83,10 +84,8 @@ final class IntegrationSuggestions: ObservableObject {
         guard let def = current else { return }
         current = nil
         if yes {
-            if case .browser = def.auth { ConnectorStore.shared.connect(def) } else {
-                HomeRouter.shared.settings = .integrations
-                (NSApp.delegate as? AppDelegate)?.showHome()
-            }
+            HomeRouter.shared.settings = .integrations
+            (NSApp.delegate as? AppDelegate)?.showHome()
         } else if never {
             defaults.set(true, forKey: "suggest.never.\(def.id)")
         } else {

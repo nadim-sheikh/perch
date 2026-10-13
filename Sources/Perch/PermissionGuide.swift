@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// Floating helper shown while System Settings is open: drag Perch's icon into the list.
+/// Floating helper shown while System Settings is open: tells the user to switch Perch on.
 @MainActor
 enum PermissionGuide {
     private static var panel: NSPanel?
+    private static var watcher: Timer?
 
     static func open(_ kind: Kind) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(kind.anchor)") {
@@ -32,7 +33,7 @@ enum PermissionGuide {
     }
 
     private static func show(_ kind: Kind) {
-        panel?.close()
+        close()
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 92),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isOpaque = false
@@ -47,16 +48,18 @@ enum PermissionGuide {
         p.orderFrontRegardless()
         panel = p
         // Close by itself once the permission is granted.
-        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { t in
+        watcher = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
             MainActor.assumeIsolated {
                 let s = PermissionSnapshot.current()
                 let done = kind == .screen ? s.screen : kind == .accessibility ? s.accessibility : s.speech
-                if done || panel == nil { t.invalidate(); if done { NSSound(named: "Glass")?.play(); close() } }
+                if done { NSSound(named: "Glass")?.play(); close() }
             }
         }
     }
 
     static func close() {
+        watcher?.invalidate()
+        watcher = nil
         panel?.close()
         panel = nil
     }
@@ -68,13 +71,11 @@ private struct GuideCard: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
-                .resizable().frame(width: 52, height: 52)
-                .onDrag { NSItemProvider(contentsOf: Bundle.main.bundleURL) ?? NSItemProvider() }
-                .help("Drag me into the list")
+            icon
             VStack(alignment: .leading, spacing: 3) {
-                Text("Drag me into \(kind.title)").font(.system(size: 13, weight: .semibold))
-                Text("Then flip my switch on. I'll wait right here.").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                Text("Switch Perch on in \(kind.title)").font(.system(size: 13, weight: .semibold))
+                Text(detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(IconButtonStyle())
@@ -84,5 +85,24 @@ private struct GuideCard: View {
         .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color(red: 0.1, green: 0.1, blue: 0.12)))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.1)))
         .preferredColorScheme(.dark)
+    }
+
+    /// The Microphone list can't take dropped apps; the other two can.
+    private var detail: String {
+        kind == .microphone
+            ? "Find Perch in the list and flip its switch on. I'll wait right here."
+            : "Find Perch in the list and flip its switch on. Not there? Drag me in. I'll wait right here."
+    }
+
+    @ViewBuilder private var icon: some View {
+        let image = Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
+            .resizable().frame(width: 52, height: 52)
+        if kind == .microphone {
+            image
+        } else {
+            image
+                .onDrag { NSItemProvider(contentsOf: Bundle.main.bundleURL) ?? NSItemProvider() }
+                .help("Drag me into the list")
+        }
     }
 }

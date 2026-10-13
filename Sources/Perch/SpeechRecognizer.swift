@@ -70,6 +70,9 @@ final class SpeechRecognizer {
     private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var latestTranscript = ""
     private var finished: CheckedContinuation<String, Never>?
+    /// Bumped by `cancel()`, so a start that was waiting when it was cancelled never turns the mic on.
+    private var generation = 0
+    private var tapInstalled = false
 
     var onLevel: ((Float) -> Void)?
     var onPartial: ((String) -> Void)?
@@ -97,10 +100,13 @@ final class SpeechRecognizer {
 
     func start() async throws {
         cancel()
+        let gen = generation
         usingParakeet = Self.preferredEngine == .parakeet ? await Parakeet.shared.isReady : false
+        guard gen == generation else { throw CancellationError() }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
+        tapInstalled = true
 
         if usingParakeet {
             samples.removeAll(keepingCapacity: true)
@@ -141,12 +147,17 @@ final class SpeechRecognizer {
             }
         }
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            cancel()
+            throw error
+        }
     }
 
     func stop() async -> String {
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        removeTap()
         onLevel?(0)
         if usingParakeet {
             partialTask?.cancel()
@@ -162,14 +173,21 @@ final class SpeechRecognizer {
     }
 
     func cancel() {
+        generation += 1
         partialTask?.cancel()
         task?.cancel()
+        // A `stop()` still waiting for the final words gets what was heard so far.
+        finish()
         task = nil
         request = nil
-        if engine.isRunning {
-            engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
-        }
+        if engine.isRunning { engine.stop() }
+        removeTap()
+    }
+
+    private func removeTap() {
+        guard tapInstalled else { return }
+        tapInstalled = false
+        engine.inputNode.removeTap(onBus: 0)
     }
 
     /// Live words while talking: re-transcribe the growing clip about once a second.

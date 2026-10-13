@@ -16,7 +16,10 @@ final class Companion {
     private let speaker = Speaker()
     private var currentTask: Task<Void, Never>?
     private var hideBubbleWork: DispatchWorkItem?
-    private var listenStart: Task<Void, Never>?
+    /// Whether the mic started for the current listen.
+    private var listenStart: Task<Bool, Never>?
+    /// Bumped by every listen and interrupt, so a stale listen task never changes the phase or asks.
+    private var listenSession = 0
 
     init() {
         speech.onLevel = { [weak self] level in self?.state.audioLevel = level }
@@ -30,36 +33,61 @@ final class Companion {
 
     func beginListening() {
         interrupt()
+        let session = listenSession
         state.phase = .listening
         state.bubbleText = ""
         listenStart = Task {
             do {
                 try await speech.start()
+                return true
             } catch {
-                show(error: "Microphone unavailable: \(error.localizedDescription)")
+                if session == listenSession { show(error: "Microphone unavailable: \(error.localizedDescription)") }
+                return false
             }
         }
     }
 
     func endListening() {
         guard state.phase == .listening else { return }
+        let session = listenSession
+        let start = listenStart
         currentTask = Task {
-            await listenStart?.value
+            // A mic that failed to start is already showing its error: leave it visible.
+            guard await start?.value ?? true, isCurrent(session) else { return }
             let transcript = await speech.stop()
+            guard isCurrent(session) else { return }
             guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else {
                 state.phase = .idle
                 state.bubbleText = ""
                 return
             }
-            // Talking while a helper's chat is open sends the words straight to that helper.
-            if NSApp.isActive, let slug = HomeRouter.shared.selectedAgent, HomeRouter.shared.settings == nil {
-                state.phase = .idle
-                state.bubbleText = ""
+            if QuickCommands.isStop(transcript) {
+                await quickReply(QuickCommands.stopEverything())
+                return
+            }
+            // Talking while Home shows a helper's chat sends the words straight to that helper.
+            let router = HomeRouter.shared
+            if NotchModel.shared.homeOpen, router.settings == nil, router.selectedGroup == nil,
+               let slug = router.selectedAgent, let agent = AgentRoster.shared.agent(slug) {
                 AgentManager.shared.launch(slug: slug, prompt: transcript)
+                state.phase = .idle
+                state.bubbleText = "Sent to \(agent.name)."
+                scheduleBubbleHide(after: 2.5)
                 return
             }
             await ask(transcript)
         }
+    }
+
+    /// The talk keys were part of a shortcut: drop what was heard without asking.
+    func cancelListening() {
+        guard state.phase == .listening else { return }
+        interrupt()
+        state.bubbleText = ""
+    }
+
+    private func isCurrent(_ session: Int) -> Bool {
+        !Task.isCancelled && session == listenSession
     }
 
     // MARK: Asking
@@ -72,9 +100,13 @@ final class Companion {
     func interrupt() {
         currentTask?.cancel()
         currentTask = nil
+        listenSession += 1
         speech.cancel()
         speaker.stop()
         hideBubbleWork?.cancel()
+        TextTools.shared.yieldBubble()
+        // A notch answer cut short must not keep its thinking dots spinning.
+        NotchModel.shared.finishResponse()
         state.phase = .idle
     }
 
@@ -85,6 +117,7 @@ final class Companion {
     /// Show and speak a line without asking the model (e.g. "Shippy: your site is ready").
     func announce(_ text: String) {
         guard state.phase == .idle else { return }
+        TextTools.shared.yieldBubble()
         state.bubbleText = text
         currentTask = Task {
             await speaker.speak(text)
@@ -98,8 +131,29 @@ final class Companion {
         if inNotch { notch.showResponse(question: question) }
         state.phase = .thinking
         state.bubbleText = ""
+        if let reply = await QuickCommands.handle(question) {
+            if Task.isCancelled { return }
+            let id = store.activeConversationID()
+            store.append(Message(role: .user, text: question), to: id)
+            store.append(Message(role: .assistant, text: reply), to: id)
+            if inNotch { notch.responseText = reply; notch.responseFinished = true; state.phase = .idle; return }
+            await quickReply(reply)
+            return
+        }
+        if let job = AgentTrigger.match(question) {
+            let cursorScreen = ScreenCapture.hasPermission()
+                ? (try? await ScreenCapture.captureCursorScreen()) ?? nil : nil
+            if Task.isCancelled { return }
+            let id = store.activeConversationID()
+            store.append(Message(role: .user, text: question), to: id)
+            let reply = AgentTrigger.start(job, screenshot: cursorScreen)
+            store.append(Message(role: .assistant, text: reply), to: id)
+            if inNotch { notch.responseText = reply; notch.responseFinished = true; state.phase = .idle; return }
+            await quickReply(reply)
+            return
+        }
         let conversationID = store.activeConversationID()
-        let history = store.history(for: conversationID)
+        let history = store.history(for: conversationID, limit: 6)
         store.append(Message(role: .user, text: question), to: conversationID)
         store.streamingText = ""
         defer { store.streamingText = nil }
@@ -107,18 +161,19 @@ final class Companion {
         var screens: [CapturedScreen] = []
         perchLog.notice("ask: screen permission \(ScreenCapture.hasPermission())")
         if ScreenCapture.hasPermission() {
-            screens = (try? await ScreenCapture.captureAll()) ?? []
+            // Only the screen with the cursor: every extra screenshot costs tokens.
+            screens = ((try? await ScreenCapture.captureCursorScreen()) ?? nil).map { [$0] } ?? []
         }
-        perchLog.notice("ask: captured \(screens.count) screens, provider \(settings.provider.rawValue) model \(settings.activeModel) key \(settings.activeKey.isEmpty ? "missing" : "set")")
-
-        let client = LLMClient(provider: settings.provider, apiKey: settings.activeKey, model: settings.replyModel)
+        // interrupt() already stopped the speaker; starting live speech now would leave it polling.
+        if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
+        perchLog.notice("ask: captured \(screens.count) screens, model \(PerchModel.id) key \(settings.hasKey ? "set" : "missing")")
         var full = ""
+        var visible = ""
         // Speak sentence by sentence while the answer is still arriving.
         let speakLive = !inNotch && settings.voiceEngine == .kokoro
         var spokenUpTo = 0
         if speakLive { speaker.beginLive() }
         func flushSpeech(final: Bool) {
-            let visible = MarkTags.stripAll(full)
             guard visible.count > spokenUpTo else { return }
             let pending = String(visible.dropFirst(spokenUpTo))
             var cut = pending.endIndex
@@ -126,56 +181,68 @@ final class Companion {
                 // Speak whole sentences, in chunks big enough to sound smooth (the first one a little sooner).
                 guard let r = pending.range(of: #"[.!?](\s)"#, options: [.regularExpression, .backwards]) else { return }
                 let words = pending[..<r.upperBound].split(separator: " ").count
-                if words < (spokenUpTo == 0 ? 10 : 16) { return }
+                if words < (spokenUpTo == 0 ? 3 : 14) { return }
                 cut = r.upperBound
             }
             let piece = String(pending[..<cut])
             spokenUpTo += piece.count
             speaker.enqueueLive(piece)
         }
+        // Re-stripping the whole reply is linear in its length, so refresh the shown text at most
+        // ~20 times a second instead of on every chunk.
+        var lastRefresh = Date.distantPast
+        func refresh() {
+            lastRefresh = Date()
+            visible = MarkTags.stripAll(full)
+            if inNotch {
+                if notch.responseText.isEmpty && !visible.isEmpty { NSSound(named: "Tink")?.play() }
+                notch.responseText = visible
+            } else {
+                state.bubbleText = visible
+            }
+            store.streamingText = visible
+            if speakLive { flushSpeech(final: false) }
+        }
         do {
-            let stream = client.stream(
-                system: Prompts.system(name: settings.buddyName, screenCount: screens.count) + Handoff.rosterNote(),
-                history: history,
-                prompt: question,
-                screens: screens
-            )
+            // Without the trigger word Perch only shows how: a plain, fast reply with markers, no actions.
+            let system = Prompts.system(name: settings.buddyName, screenCount: screens.count) + AgentTrigger.guideInstructions
+            let stream = LLMClient().stream(system: system, history: history, prompt: question, screens: screens)
             for try await chunk in stream {
                 if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
                 if full.isEmpty { perchLog.notice("ask: first chunk") }
                 full += chunk
                 state.phase = .responding
-                let visible = MarkTags.stripAll(full)
-                if inNotch {
-                    if notch.responseText.isEmpty { NSSound(named: "Tink")?.play() }
-                    notch.responseText = visible
-                } else {
-                    state.bubbleText = visible
-                }
-                store.streamingText = visible
-                if speakLive { flushSpeech(final: false) }
+                if Date().timeIntervalSince(lastRefresh) >= 0.05 { refresh() }
             }
         } catch {
             perchLog.error("ask: error \(error.localizedDescription)")
             if !Task.isCancelled {
-                if inNotch { notch.responseText = "⚠️ " + error.localizedDescription; notch.responseFinished = true }
-                show(error: error.localizedDescription)
-                store.append(Message(role: .error, text: error.localizedDescription), to: conversationID)
+                speaker.stop()
+                let message = AgentEngineError.friendly(error)
+                if inNotch { notch.responseText = "⚠️ " + message; notch.responseFinished = true }
+                show(error: message)
+                store.append(Message(role: .error, text: message), to: conversationID)
             }
             return
         }
-
-        let spoken = MarkTags.stripAll(full)
-        store.append(Message(role: .assistant, text: spoken), to: conversationID)
-
-        if let handoff = Handoff.parse(full) {
-            let cursorScreen = screens.first { $0.containsCursor } ?? screens.first
-            Handoff.perform(handoff, screenshot: cursorScreen)
-        }
+        // A cancelled stream just ends, so check before treating the partial reply as finished.
+        if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
+        refresh()
 
         let marks = MarkTags.parse(full, screens: screens)
+        let pointTarget = Pointing.firstTarget(in: full)
+        guard !visible.isEmpty || !marks.isEmpty || pointTarget != nil else {
+            // Nothing to say or show: don't save an empty message or count it as an answer.
+            speaker.stop()
+            let message = "I came back empty, try again."
+            if inNotch { notch.responseText = message; notch.responseFinished = true }
+            show(error: message)
+            return
+        }
+        if !visible.isEmpty { store.append(Message(role: .assistant, text: visible), to: conversationID) }
+
         if !marks.isEmpty { state.show(marks: marks) }
-        if let target = Pointing.firstTarget(in: full), let screen = screens.first(where: { $0.index == target.screen }) {
+        if let target = pointTarget, let screen = screens.first(where: { $0.index == target.screen }) ?? screens.first {
             state.point(at: screen.globalPoint(fromImagePoint: target.point), label: target.label)
         } else if let first = marks.first {
             state.point(at: first.anchor, label: first.label)
@@ -190,13 +257,23 @@ final class Companion {
             flushSpeech(final: true)
             await speaker.finishLive()
         } else {
-            await speaker.speak(spoken)
+            await speaker.speak(visible)
         }
         if Task.isCancelled { return }
         state.phase = .idle
         // Linger just long enough to finish reading, then fade.
-        let words = Double(spoken.split(separator: " ").count)
+        let words = Double(visible.split(separator: " ").count)
         scheduleBubbleHide(after: AppSettings.shared.voiceEngine == .off ? min(max(2.5 + words * 0.25, 4), 14) : 2.5)
+    }
+
+    /// Shows and speaks a short reply that didn't need the model.
+    private func quickReply(_ text: String) async {
+        state.phase = .responding
+        state.bubbleText = text
+        await speaker.speak(text)
+        if Task.isCancelled { return }
+        state.phase = .idle
+        scheduleBubbleHide(after: 2.5)
     }
 
     private func show(error message: String) {
@@ -288,84 +365,62 @@ enum Pointing {
         let label = Range(m.range(at: 4), in: text).map { String(text[$0]).trimmingCharacters(in: .whitespaces) }
         return Target(point: CGPoint(x: x, y: y), screen: screen, label: label?.isEmpty == true ? nil : label)
     }
-
-    /// Removes complete tags, and hides a partially streamed tag at the end.
-    static func stripTags(_ text: String) -> String {
-        var out = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
-        if let open = out.range(of: "[", options: .backwards), !out[open.lowerBound...].contains("]") {
-            out = String(out[..<open.lowerBound])
-        }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 }
 
-/// Lets the buddy pass bigger jobs to a background helper by ending its reply
-/// with [AGENT:slug:task] or [NEW_AGENT:Name|Role:task].
+/// Saying the trigger word ("agent" by default) at the start hands the job to a helper who
+/// does it. Without it, Perch only explains and marks the screen.
 @MainActor
-enum Handoff {
-    enum Kind {
-        case existing(slug: String, task: String)
-        case new(name: String, role: String, task: String)
+enum AgentTrigger {
+    struct Job { let task: String; let helper: BuddyAgent? }
+
+    static var word: String {
+        let w = UserDefaults.standard.string(forKey: "agentTriggerWord")?.trimmingCharacters(in: .whitespaces) ?? ""
+        return w.isEmpty ? "agent" : w
     }
 
-    static func rosterNote() -> String {
-        let manager = AgentManager.shared
-        let agents = AgentRoster.shared.agents.filter { !$0.archived }
-        let lines = agents.map { a -> String in
-            let status = manager.running.contains(a.id) ? "working now" : "idle"
-            let last = manager.lastTurn(a.id)?.summary.map { " - last result: \($0)" } ?? ""
-            return "- \(a.name) (slug: \(a.id)) - \(a.role): \(a.oneLiner) [\(status)]\(last)"
-        }.joined(separator: "\n")
-        return """
-
-
-        Helpers: you have background helpers who can do real multi-step work on this Mac (build websites and apps, \
-        research the web and write reports, make documents, use the user's connected apps, work with files). \
-        Hand a job to a helper when it needs more than a quick spoken answer. Keep your spoken reply to one short \
-        sentence like "Shippy's on it", then end your reply with exactly one tag:
-        [AGENT:slug:a complete, self-contained description of the task]
-        or, if no helper fits, create one:
-        [NEW_AGENT:Name|Role:the task]
-        Include in the task anything from the screen or conversation the helper will need. Questions about what a \
-        helper did can be answered from the list below. Never mention the tags.
-        Current helpers:
-        \(lines.isEmpty ? "(none yet)" : lines)
-        """
-    }
-
-    private static let regex = try! NSRegularExpression(
-        pattern: #"\[(AGENT|NEW_AGENT):([^:\]]+):([^\]]+)\]"#, options: [.dotMatchesLineSeparators])
-
-    static func parse(_ text: String) -> Kind? {
-        guard let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let kindR = Range(m.range(at: 1), in: text), let aR = Range(m.range(at: 2), in: text),
-              let taskR = Range(m.range(at: 3), in: text) else { return nil }
-        let a = text[aR].trimmingCharacters(in: .whitespaces)
-        let task = text[taskR].trimmingCharacters(in: .whitespacesAndNewlines)
-        if text[kindR] == "AGENT" { return .existing(slug: a.lowercased(), task: task) }
-        let parts = a.split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-        return .new(name: parts.first ?? "Helper", role: parts.count > 1 ? parts[1] : "Helper", task: task)
-    }
-
-    static func strip(_ text: String) -> String {
-        regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func perform(_ kind: Kind, screenshot: CapturedScreen?) {
-        let roster = AgentRoster.shared
-        switch kind {
-        case .existing(let slug, let task):
-            let agent = roster.agent(slug) ?? roster.agents.first { $0.name.lowercased() == slug }
-            guard let agent else {
-                perform(.new(name: slug.capitalized, role: "Helper", task: task), screenshot: screenshot)
-                return
-            }
-            AgentManager.shared.launch(slug: agent.id, prompt: task, screenshot: screenshot)
-        case .new(let name, let role, let task):
-            guard let agent = try? roster.create(name: name, role: role, oneLiner: "Helps with: \(role.lowercased()).") else { return }
-            AgentManager.shared.registerNewAgent(agent)
-            AgentManager.shared.launch(slug: agent.id, prompt: task, screenshot: screenshot)
+    /// Matches "agent, build me a site", "hey agent …", "Agent Shippy …".
+    static func match(_ text: String) -> Job? {
+        let lower = text.lowercased()
+        let w = word.lowercased()
+        let pattern = "^\\W*(hey\\s+|ok\\s+|okay\\s+)?" + NSRegularExpression.escapedPattern(for: w) + "\\b[\\s,.:!-]*"
+        guard let r = lower.range(of: pattern, options: .regularExpression) else { return nil }
+        var task = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        // A helper named right after the word picks that helper.
+        let roster = AgentRoster.shared.agents.filter { !$0.archived }
+        var helper: BuddyAgent?
+        for a in roster where task.lowercased().hasPrefix(a.name.lowercased()) {
+            helper = a
+            task = String(task.dropFirst(a.name.count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,.:!-"))
+            break
         }
+        if helper == nil { helper = roster.first { task.lowercased().contains($0.name.lowercased()) } }
+        guard !task.isEmpty else { return nil }
+        return Job(task: task, helper: helper)
+    }
+
+    /// Starts the helper and returns a short line to say.
+    static func start(_ job: Job, screenshot: CapturedScreen?) -> String {
+        let roster = AgentRoster.shared
+        let manager = AgentManager.shared
+        let helper: BuddyAgent? = job.helper
+            ?? roster.agents.filter { !$0.archived }.max { manager.lastActivity($0.id) < manager.lastActivity($1.id) }
+            ?? (try? roster.create(name: "Perch Agent", role: "Does anything you ask",
+                                   oneLiner: "Takes on any job you hand over and gets it done."))
+        guard let helper else { return "I couldn't start a helper just now." }
+        manager.registerNewAgent(helper)
+        manager.launch(slug: helper.id, prompt: job.task, screenshot: screenshot)
+        return ["On it. \(helper.name)'s taking care of that.", "Got it, \(helper.name) is on it.",
+                "Sure thing. Handing that to \(helper.name)."].randomElement()!
+    }
+
+    static var guideInstructions: String {
+        """
+
+
+        GUIDE MODE. Right now you only show and explain; you never do things for them. When they want to do \
+        something, tell them the next step in a sentence or two and mark exactly where on the screen with POINT \
+        and a HIGHLIGHT (or CIRCLE/ARROW). For longer tasks give just the next step and say you'll guide them on. \
+        If they ask you to actually do it for them, tell them to start with the word "\(word)" and a helper will handle it.
+        """
     }
 }

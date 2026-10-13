@@ -36,12 +36,16 @@ final class NotchModel: ObservableObject {
 
     static let homeSize = CGSize(width: 880, height: 580)
     var homeLastActivity = Date()
+    /// When Home last opened; other apps activating right after (permission prompts, the
+    /// launching app) shouldn't fold it straight back.
+    private(set) var homeOpenedAt = Date.distantPast
 
     /// Grows the notch into the full Home panel.
     func openHomePanel() {
         homeLastActivity = Date()
         guard !homeOpen else { requestKeyFocus?(); return }
         textInputOpen = false
+        homeOpenedAt = Date()
         homeOpen = true
         requestKeyFocus?()
     }
@@ -77,6 +81,13 @@ final class NotchModel: ObservableObject {
         responseVisible = false
         responseText = ""
     }
+
+    /// Ends a notch answer that stopped early (interrupt, cancel): starts the dismiss countdown
+    /// if something was shown, otherwise closes the card so the thinking dots don't spin forever.
+    func finishResponse() {
+        guard responseVisible else { return }
+        if responseText.isEmpty { dismissResponse() } else { responseFinished = true }
+    }
 }
 
 final class NotchPanel: NSPanel {
@@ -91,6 +102,12 @@ final class NotchPanel: NSPanel {
         hidesOnDeactivate = false
     }
     override var canBecomeKey: Bool { true }
+}
+
+/// Takes the first click even while Perch is in the background, so one click on the
+/// island opens Home instead of only making the panel key.
+private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 @MainActor
@@ -108,6 +125,9 @@ final class NotchController {
     private let panelSize = CGSize(width: 920, height: 640)
     private var homeMouseLeftAt: Date?
     private var inputMonitor: Any?
+    private var moveMonitor: Any?
+    /// The mouse has been over Home since it opened; only then does leaving it fold Home away.
+    private var homeMouseEntered = false
     private var voiceHeldUntil = Date.distantPast
 
     func show() {
@@ -117,13 +137,16 @@ final class NotchController {
             .environmentObject(ConversationStore.shared)
             .environmentObject(AgentManager.shared)
             .environmentObject(AgentRoster.shared)
-        panel.contentView = NSHostingView(rootView: view)
+        panel.contentView = FirstClickHostingView(rootView: view)
         layout()
         panel.orderFrontRegardless()
 
         model.requestKeyFocus = { [weak self] in
             guard let self else { return }
-            self.previousApp = NSWorkspace.shared.frontmostApplication
+            // Remember the app to return to, never Perch itself (Home already open, a second request).
+            if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+                self.previousApp = front
+            }
             NSApp.activate(ignoringOtherApps: true)
             self.panel.makeKey()
         }
@@ -155,19 +178,28 @@ final class NotchController {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             MainActor.assumeIsolated {
-                guard let self, self.model.homeOpen, app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                guard let self, self.model.homeOpen, app?.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+                      Date().timeIntervalSince(self.model.homeOpenedAt) > 1.5 else { return }
                 self.model.homeOpen = false
             }
+        }
+        // The panel ignores the mouse away from the island; react to moves at once so a quick
+        // move-and-click on the island isn't let through to the menu bar before the next tick.
+        moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateMouseCapture() }
         }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
     }
 
-    private var screen: NSScreen { NSScreen.screens.first ?? NSScreen.main! }
+    /// The screen that holds the island: the one with a camera notch, else the menu-bar screen.
+    static var hostScreen: NSScreen? {
+        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.screens.first
+    }
 
     private func layout() {
-        let s = screen
+        guard let s = Self.hostScreen else { return }
         model.notchHeight = max(s.safeAreaInsets.top, 28)
         if let left = s.auxiliaryTopLeftArea, let right = s.auxiliaryTopRightArea {
             model.hardwareNotchWidth = s.frame.width - left.width - right.width
@@ -191,20 +223,28 @@ final class NotchController {
         }
     }
 
+    /// Where the visible shape is, clipped to its own screen so a monitor above can't trigger it.
     private func hitRect(_ p: NotchModel.Presentation, inflate: CGFloat) -> NSRect {
-        let s = screen
+        let frame = panel.screen?.frame ?? panel.frame
         let size = visibleSize(p)
-        return NSRect(x: s.frame.midX - size.width / 2, y: s.frame.maxY - size.height, width: size.width, height: size.height)
+        return NSRect(x: panel.frame.midX - size.width / 2, y: panel.frame.maxY - size.height, width: size.width, height: size.height)
             .insetBy(dx: -inflate, dy: -inflate)
+            .intersection(frame)
+    }
+
+    private func updateMouseCapture() {
+        let current = model.presentation
+        let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(NSEvent.mouseLocation)
+        panel.ignoresMouseEvents = !inside && !model.textInputOpen && current != .home
     }
 
     private var idleSkip = 0
 
     private func tick() {
         // Far from the notch with nothing happening: check only a few times a second.
-        let mouseY = NSEvent.mouseLocation.y
-        if model.presentation == .docked, !model.textInputOpen, !model.responseVisible,
-           mouseY < screen.frame.maxY - 120, BuddyState.shared.phase == .idle, AgentManager.shared.running.isEmpty,
+        let mouseNearTop = hitRect(.docked, inflate: 120).contains(NSEvent.mouseLocation)
+        if model.presentation == .docked, !model.textInputOpen, !model.responseVisible, !model.homeOpen,
+           !mouseNearTop, BuddyState.shared.phase == .idle, AgentManager.shared.running.isEmpty,
            IntegrationSuggestions.shared.current == nil {
             idleSkip += 1
             if idleSkip % 6 != 0 { return }
@@ -216,7 +256,7 @@ final class NotchController {
         let current = model.presentation
         let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(mouse)
         panel.ignoresMouseEvents = !inside && !model.textInputOpen && current != .home
-        if current == .home { homeDismissCheck(inside: inside, now: now) } else { homeMouseLeftAt = nil }
+        if current == .home { homeDismissCheck(inside: inside, now: now) } else { homeMouseLeftAt = nil; homeMouseEntered = false }
         if model.hovering != inside { model.hovering = inside }
 
         // Hover dwell → peek, with re-entry suppression after an explicit dismiss.
@@ -266,7 +306,9 @@ final class NotchController {
         let window = panel
         let busy = BuddyState.shared.phase != .idle || window.attachedSheet != nil || NSApp.modalWindow != nil
             || NSApp.windows.contains { $0.isSheet && $0.isVisible }
-        if inside { homeMouseLeftAt = nil } else if homeMouseLeftAt == nil { homeMouseLeftAt = now }
+        // Home opened from the menu, the Dock or at launch may be far from the mouse: wait until
+        // the mouse has visited it before treating "outside" as "wandered off".
+        if inside { homeMouseEntered = true; homeMouseLeftAt = nil } else if homeMouseEntered, homeMouseLeftAt == nil { homeMouseLeftAt = now }
         let typing = window.firstResponder is NSTextView && now.timeIntervalSince(model.homeLastActivity) < 10
         if !busy, !typing, let left = homeMouseLeftAt, now.timeIntervalSince(left) > 1.6 { model.closeHome() }
         if !busy, now.timeIntervalSince(model.homeLastActivity) > 45 { model.closeHome() }
@@ -396,7 +438,10 @@ struct NotchRootView: View {
                 .clipShape(NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11))
                 .shadow(color: .black.opacity(model.presentation.isCard ? 0.45 : 0), radius: 18, y: 6)
                 .contentShape(NotchShape(radius: 11))
-                .onTapGesture { if model.presentation == .docked || model.presentation == .agents { model.openHome?(nil) } }
+                .onTapGesture {
+                    // The peek opens after a short hover, so a click on the island usually lands on it.
+                    if [.docked, .agents, .peek].contains(model.presentation) { model.openHome?(nil) }
+                }
             }
             .frame(width: size.width + 60, height: size.height, alignment: .top)
             Spacer(minLength: 0)
@@ -798,7 +843,8 @@ struct WaveBars: View {
 struct ThinkingDots: View {
     var color: Color = .white
     var body: some View {
-        TimelineView(.animation) { ctx in
+        // ~12 fps is plenty for a slow pulse, and helper jobs can keep these on screen for minutes.
+        TimelineView(.periodic(from: .now, by: 1.0 / 12)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             HStack(spacing: 3.5) {
                 ForEach(0..<3) { i in

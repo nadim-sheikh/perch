@@ -20,12 +20,14 @@ final class BuddyState: ObservableObject {
     @Published var position: CGPoint = NSEvent.mouseLocation
     @Published var phase: BuddyPhase = .idle
     @Published var bubbleText: String = "" {
-        didSet { if bubbleText != oldValue { bubbleChangedAt = Date() } }
+        didSet { if bubbleText != oldValue { bubbleChangedAt = Date(); wakeFollow() } }
     }
     private var bubbleChangedAt = Date()
     @Published var pointLabel: String?
     @Published var audioLevel: Float = 0
-    @Published var navigation: Navigation = .following
+    @Published var navigation: Navigation = .following {
+        didSet { wakeFollow() }
+    }
     /// Rotation of the triangle in degrees (0 = resting tilt) and scale during flight.
     @Published var rotation: Double = 0
     @Published var flightScale: CGFloat = 1
@@ -45,21 +47,48 @@ final class BuddyState: ObservableObject {
     var isPointing: Bool { navigation != .following }
 
     private var followTimer: Timer?
+    private var mouseMonitors: [Any] = []
     private var flightTimer: Timer?
     private let cursorOffset = CGPoint(x: 16, y: -18)
     private var pointingStartedMouse: CGPoint = .zero
 
     private static let phrases = ["right here!", "this one!", "over here!", "here it is!", "found it!", "look here!", "this spot!"]
 
+    /// Follows the mouse with a 60 Hz timer that only runs while there's something to do:
+    /// mouse movement wakes it, and it stops once the buddy has caught up and no bubble is up.
     func startFollowingCursor() {
-        followTimer?.invalidate()
-        followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        guard mouseMonitors.isEmpty else { return }
+        let moves: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: moves, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.wakeFollow() }
+        }) { mouseMonitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: moves, handler: { [weak self] e in
+            MainActor.assumeIsolated { self?.wakeFollow() }
+            return e
+        }) { mouseMonitors.append(local) }
+        wakeFollow()
+    }
+
+    private func wakeFollow() {
+        guard followTimer == nil, !mouseMonitors.isEmpty else { return }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.followTick() }
         }
-        RunLoop.main.add(followTimer!, forMode: .common)
+        RunLoop.main.add(timer, forMode: .common)
+        followTimer = timer
+    }
+
+    private func sleepFollow() {
+        followTimer?.invalidate()
+        followTimer = nil
     }
 
     private func followTick() {
+        if !followStep() && bubbleText.isEmpty { sleepFollow() }
+    }
+
+    /// One follow frame. Returns false when nothing moved, so the timer may sleep.
+    private func followStep() -> Bool {
         // Safety net: a bubble that hasn't changed for a while always fades away.
         if !bubbleText.isEmpty, phase != .listening, phase != .thinking {
             let quiet = Date().timeIntervalSince(bubbleChangedAt)
@@ -70,14 +99,16 @@ final class BuddyState: ObservableObject {
         if navigation == .pointing {
             // If the user moves the mouse a lot while we point, give up and come back.
             if hypot(mouse.x - pointingStartedMouse.x, mouse.y - pointingStartedMouse.y) > 220 { returnToCursor() }
-            return
+            return false
         }
-        guard navigation == .following, AppSettings.shared.followCursor else { return }
+        guard navigation == .following, AppSettings.shared.followCursor else { return false }
         let target = CGPoint(x: mouse.x + cursorOffset.x, y: mouse.y + cursorOffset.y)
         // A tiny bit of lag makes it feel alive without trailing behind.
         let next = CGPoint(x: position.x + (target.x - position.x) * 0.45,
                            y: position.y + (target.y - position.y) * 0.45)
-        if abs(next.x - position.x) > 0.25 || abs(next.y - position.y) > 0.25 { position = next }
+        guard abs(next.x - position.x) > 0.25 || abs(next.y - position.y) > 0.25 else { return false }
+        position = next
+        return true
     }
 
     /// Fly along an arc to a global point, point at it, then fly back.

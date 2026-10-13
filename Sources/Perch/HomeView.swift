@@ -32,7 +32,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var group: String {
         switch self {
         case .general, .ai, .permissions: return ""
-        case .voice, .microphone, .dictation, .shortcuts, .cursor: return "OPENBUDDY"
+        case .voice, .microphone, .dictation, .shortcuts, .cursor: return "BUDDY"
         case .agents, .integrations: return "WORK"
         }
     }
@@ -332,6 +332,7 @@ struct LogoGlyph: View {
 
 struct HomeEmptyState: View {
     @AppStorage("buddyName") private var buddyName = "Perch"
+    @ObservedObject private var settings = AppSettings.shared
     private let tagline = [
         "Hold Control + Option and hand me a chore.",
         "Hold Control + Option. I'm all ears. Well, all cloud.",
@@ -356,8 +357,15 @@ struct HomeEmptyState: View {
                 MascotView(size: 96, animated: true, showHands: true)
             }
             Text(greeting).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.textPrimary)
-            Text(tagline)
-                .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            if settings.hasKey {
+                Text(tagline)
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            } else {
+                Text("Add your OpenRouter key first, so I can think.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                Button { HomeRouter.shared.settings = .ai } label: { Label("Add key", systemImage: "key.fill") }
+                    .buttonStyle(GlassPillStyle(height: 28))
+            }
             Spacer()
             TypeField().frame(width: 320).padding(.bottom, 24)
         }

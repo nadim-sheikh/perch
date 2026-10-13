@@ -122,6 +122,14 @@ struct AgentTurnView: View {
 
             if turn.state == .working {
                 workingView
+            } else if turn.state == .queued {
+                HStack(spacing: 8) {
+                    Label("Queued. Starts when the current task is done.", systemImage: "clock")
+                        .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                    Spacer()
+                    Button("Cancel") { AgentManager.shared.cancelQueued(agent.id, turnID: turn.id) }
+                        .buttonStyle(ChipStyle())
+                }
             } else {
                 if !turn.steps.isEmpty || !turn.progress.isEmpty {
                     DisclosureGroup(isExpanded: $expanded) {
@@ -133,9 +141,13 @@ struct AgentTurnView: View {
                     .tint(Theme.textSecondary)
                 }
 
-                if let error = turn.error {
+                if let error = turn.error, turn.canContinue == true {
+                    MessageBubble(message: Message(role: .assistant, text: error), dimmed: true)
+                    Button { AgentManager.shared.retry(agent.id, turnID: turn.id) } label: { Label("Continue", systemImage: "play.fill") }
+                        .buttonStyle(ChipStyle())
+                } else if let error = turn.error {
                     MessageBubble(message: Message(role: .error, text: error, date: turn.finishedAt ?? Date())) {
-                        AgentManager.shared.launch(slug: agent.id, prompt: turn.prompt)
+                        AgentManager.shared.retry(agent.id, turnID: turn.id)
                     }
                 } else if turn.state == .stopped && turn.reply.isEmpty {
                     Label("Stopped. Send another message to keep going.", systemImage: "stop.circle")

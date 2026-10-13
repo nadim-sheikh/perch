@@ -9,7 +9,7 @@ struct ConnectorDefinition: Identifiable, Hashable, Codable {
     }
     enum Auth: Hashable, Codable {
         case none
-        case browser                 // Claude Code runs the OAuth sign-in
+        case browser                 // OAuth sign-in in the browser (helpers can't use it yet: shown as Coming soon)
         case token(header: String, prefix: String, help: String)   // API key / personal token
         case env(names: [String], help: String)                     // env vars for a local server
     }
@@ -25,6 +25,9 @@ struct ConnectorDefinition: Identifiable, Hashable, Codable {
     var useCases: [String] = []
     var isCustom = false
     var domain: String? { ConnectorCatalog.domains[id] }
+
+    /// Helpers can start this connector themselves (no browser sign-in needed).
+    var usableByAgents: Bool { auth != .browser }
 }
 
 enum ConnectorCatalog {
@@ -85,142 +88,125 @@ enum ConnectorCatalog {
 final class ConnectorStore: ObservableObject {
     static let shared = ConnectorStore()
 
-    enum Status: Equatable { case unknown, checking, connected, needsSignIn, failed(String) }
+    enum Status: Equatable { case unknown, checking, connected, failed(String) }
 
     @Published private(set) var enabled: [ConnectorDefinition] = []
     @Published var status: [String: Status] = [:]
+    /// Bumped on every check, connect and disconnect, so an older check can't overwrite newer status.
+    private var checkGeneration: [String: Int] = [:]
 
     nonisolated static let folder = AgentPaths.root.appendingPathComponent("Connectors", isDirectory: true)
-    /// Directory where servers are registered with Claude Code (local scope), so sign-ins persist.
-    nonisolated static let mcpHome = folder.appendingPathComponent("MCPHome", isDirectory: true)
     private let saveURL = folder.appendingPathComponent("connectors.json")
-    var configURL: URL { Self.folder.appendingPathComponent("mcp.json") }
+    static let browserSignInNote = "Needs a browser sign-in, which helpers can't use yet. Disconnect it for now."
 
     init() {
-        try? FileManager.default.createDirectory(at: Self.mcpHome, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: saveURL), let list = try? JSONDecoder().decode([ConnectorDefinition].self, from: data) {
             enabled = list
         }
-        writeConfig()
+        migrateCustomIDs()
     }
 
     func isEnabled(_ id: String) -> Bool { enabled.contains { $0.id == id } }
 
-    /// Adds the connector and, for browser sign-in servers, opens a Terminal window to sign in.
+    /// Adds the connector (or updates its secrets), then checks that it really answers.
+    /// Secrets go to the Keychain; helpers start the server when they run.
     func connect(_ def: ConnectorDefinition, secrets: [String: String] = [:]) {
-        for (k, v) in secrets { Keychain.set(v, for: "connector.\(def.id).\(k)") }
+        guard def.usableByAgents else { return }
+        for (k, v) in secrets {
+            Keychain.set(v.trimmingCharacters(in: .whitespacesAndNewlines), for: "connector.\(def.id).\(k)")
+        }
         if !isEnabled(def.id) { enabled.append(def) }
         persist()
-        writeConfig()
-        switch def.auth {
-        case .browser:
-            if case .http(let url) = def.transport {
-                status[def.id] = .needsSignIn
-                runInTerminal(title: "Connect \(def.name)", commands: [
-                    "claude mcp remove -s local \(def.id) >/dev/null 2>&1",
-                    "claude mcp add -s local -t http \(def.id) \(url)",
-                    "echo; echo 'Signing in to \(def.name)… finish in your browser.'",
-                    "claude mcp login \(def.id)",
-                    "echo; echo 'Done! You can close this window and go back to Perch.'",
-                ])
-            }
-        default:
-            status[def.id] = .connected
-        }
+        check(def)
     }
-
-    func signInAgain(_ def: ConnectorDefinition) { connect(def) }
 
     func disconnect(_ def: ConnectorDefinition) {
         enabled.removeAll { $0.id == def.id }
         status[def.id] = nil
+        checkGeneration[def.id, default: 0] += 1
+        MCPPool.shared.drop(def.id)
         persist()
-        writeConfig()
-        if case .browser = def.auth {
-            let cli = ClaudeCodeRun.locateCLI() ?? "claude"
-            Task.detached {
-                _ = Self.shell([cli, "mcp", "logout", def.id])
-                _ = Self.shell([cli, "mcp", "remove", "-s", "local", def.id])
-            }
-        }
         for name in secretNames(def) { Keychain.set("", for: "connector.\(def.id).\(name)") }
     }
 
+    /// Adds a custom connector. Its id is ASCII-only (it becomes part of tool names) and unique.
     func addCustom(name: String, transport: ConnectorDefinition.Transport, auth: ConnectorDefinition.Auth, secrets: [String: String]) {
-        var slug = name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }.reduce("") { $0 + String($1) }
-        slug = "custom-" + slug.split(separator: "-").joined(separator: "-")
-        let def = ConnectorDefinition(id: slug, name: name, category: "Custom", symbol: "puzzlepiece.extension", colorHex: "#64748B",
-                                      blurb: "Your custom connector.", transport: transport, auth: auth, isCustom: true)
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let def = ConnectorDefinition(id: uniqueID(for: name), name: name, category: "Custom", symbol: "puzzlepiece.extension",
+                                      colorHex: "#64748B", blurb: "Your custom connector.", transport: transport, auth: auth, isCustom: true)
         connect(def, secrets: secrets)
     }
 
-    /// Asks Claude Code whether each browser sign-in server is authenticated.
+    /// "custom-" plus the name's ASCII letters and digits (or a short hash when there are none), made unique.
+    private func uniqueID(for name: String) -> String {
+        var slug = String(name.lowercased().unicodeScalars.map { ("a"..."z").contains($0) || ("0"..."9").contains($0) ? Character($0) : "-" })
+        slug = slug.split(separator: "-").joined(separator: "-")
+        if slug.isEmpty { slug = Self.shortHash(name) }
+        let base = "custom-" + String(slug.prefix(32))
+        var id = base
+        var n = 2
+        while isEnabled(id) || ConnectorCatalog.all.contains(where: { $0.id == id }) {
+            id = "\(base)-\(n)"
+            n += 1
+        }
+        return id
+    }
+
+    /// Six hex digits from the name (FNV-1a), stable across launches.
+    private static func shortHash(_ text: String) -> String {
+        var h: UInt32 = 2_166_136_261
+        for b in text.utf8 { h = (h ^ UInt32(b)) &* 16_777_619 }
+        return String(format: "%06x", h & 0xFFFFFF)
+    }
+
+    /// Older builds made ids from any letters (e.g. "custom-café"), which breaks tool names. Rename them
+    /// and move their secrets.
+    private func migrateCustomIDs() {
+        var changed = false
+        for i in enabled.indices where enabled[i].isCustom {
+            let old = enabled[i]
+            guard old.id.unicodeScalars.contains(where: { !(("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-") }) else { continue }
+            let newID = uniqueID(for: old.name)
+            for name in secretNames(old) {
+                let value = Keychain.get("connector.\(old.id).\(name)")
+                Keychain.set(value, for: "connector.\(newID).\(name)")
+                Keychain.set("", for: "connector.\(old.id).\(name)")
+            }
+            enabled[i].id = newID
+            changed = true
+        }
+        if changed { persist() }
+    }
+
+    /// Checks that each connector answers. This also warms them up for helpers.
     func refreshStatus() {
-        guard let cli = ClaudeCodeRun.locateCLI() else { return }
-        for def in enabled {
-            guard case .browser = def.auth else { status[def.id] = .connected; continue }
-            status[def.id] = .checking
-            let id = def.id
-            Task.detached {
-                let out = Self.shell([cli, "mcp", "get", id], cwd: Self.mcpHome)
-                let s: Status
-                if out.contains("Connected") { s = .connected }
-                else if out.lowercased().contains("auth") { s = .needsSignIn }
-                else if out.contains("No MCP server") { s = .needsSignIn }
-                else { s = .failed(String(out.suffix(160))) }
-                await MainActor.run { ConnectorStore.shared.status[id] = s }
-            }
+        for def in enabled { check(def) }
+    }
+
+    /// Shows "Checking…" until the connector answers or fails. Results for a connector that was
+    /// disconnected, reconnected or re-checked meanwhile are dropped.
+    private func check(_ def: ConnectorDefinition) {
+        checkGeneration[def.id, default: 0] += 1
+        guard def.usableByAgents else { status[def.id] = nil; return }
+        let generation = checkGeneration[def.id]
+        status[def.id] = .checking
+        Task {
+            let (ready, problems) = await MCPPool.shared.connections(for: [def], wait: 60)
+            guard checkGeneration[def.id] == generation, isEnabled(def.id) else { return }
+            status[def.id] = ready.isEmpty ? .failed(String((problems.first ?? "No answer").prefix(160))) : .connected
         }
     }
 
-    // MARK: Config for agent runs
-
-    /// Writes the MCP config passed to `claude -p --mcp-config`. Secrets are `${VAR}` references
-    /// resolved from the process environment, never written to disk.
-    func writeConfig() {
-        var servers: [String: Any] = [:]
-        for def in enabled {
-            switch def.transport {
-            case .http(let url):
-                var entry: [String: Any] = ["type": "http", "url": url]
-                if case .token(let header, let prefix, _) = def.auth {
-                    entry["headers"] = [header: "\(prefix)${\(envName(def, "TOKEN"))}"]
-                }
-                servers[def.id] = entry
-            case .stdio(let command, let args):
-                var entry: [String: Any] = ["type": "stdio", "command": command, "args": args]
-                if case .env(let names, _) = def.auth {
-                    entry["env"] = Dictionary(uniqueKeysWithValues: names.map { ($0, "${\(envName(def, $0))}") })
-                }
-                servers[def.id] = entry
-            }
+    /// Secret values for one connector, by name (e.g. TOKEN or an env var name).
+    func secrets(for def: ConnectorDefinition) -> [String: String] {
+        var out: [String: String] = [:]
+        for name in secretNames(def) {
+            let v = Keychain.get("connector.\(def.id).\(name)")
+            if !v.isEmpty { out[name] = v }
         }
-        let json: [String: Any] = ["mcpServers": servers]
-        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: configURL, options: .atomic)
-        }
+        return out
     }
-
-    /// Secret values for the agent process environment.
-    func secretEnvironment() -> [String: String] {
-        var env: [String: String] = [:]
-        for def in enabled {
-            for name in secretNames(def) {
-                let v = Keychain.get("connector.\(def.id).\(name)")
-                if !v.isEmpty { env[envName(def, name)] = v }
-            }
-        }
-        return env
-    }
-
-    /// Lines for the agent prompt describing what's connected.
-    func promptSection() -> String {
-        guard !enabled.isEmpty else { return "" }
-        let names = enabled.map(\.name).joined(separator: ", ")
-        return "\n\nCONNECTED APPS: \(names). Use their tools for the user's own data. If one fails because it isn't signed in, tell the user to reconnect it in Perch → Settings → Integrations. Never run sign-in commands yourself."
-    }
-
-    var allowedToolPatterns: [String] { enabled.map { "mcp__\($0.id)" } }
 
     private func secretNames(_ def: ConnectorDefinition) -> [String] {
         switch def.auth {
@@ -230,42 +216,7 @@ final class ConnectorStore: ObservableObject {
         }
     }
 
-    private func envName(_ def: ConnectorDefinition, _ name: String) -> String {
-        "OB_" + (def.id + "_" + name).uppercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }.reduce("") { $0 + String($1) }
-    }
-
     private func persist() {
         if let data = try? JSONEncoder.pretty.encode(enabled) { try? data.write(to: saveURL, options: .atomic) }
-    }
-
-    /// Opens Terminal with a small script, so sign-in happens somewhere the user can see.
-    private func runInTerminal(title: String, commands: [String]) {
-        let env = AgentSettings.environment()
-        let script = """
-        #!/bin/zsh
-        export PATH="\(env["PATH"] ?? "")"
-        cd "\(Self.mcpHome.path)"
-        echo "\(title)"
-        \(commands.joined(separator: "\n"))
-        """
-        let url = Self.folder.appendingPathComponent("connect.command")
-        try? script.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        NSWorkspace.shared.open(url)
-    }
-
-    nonisolated static func shell(_ args: [String], cwd: URL? = nil) -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: args[0])
-        p.arguments = Array(args.dropFirst())
-        if let cwd { p.currentDirectoryURL = cwd }
-        p.environment = AgentSettings.environment()
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        do { try p.run() } catch { return error.localizedDescription }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self)
     }
 }

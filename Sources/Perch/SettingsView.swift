@@ -26,8 +26,9 @@ struct SettingsSidebar: View {
                                 .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4)
                         }
                         ForEach(sections) { s in
-                            SidebarItem(section: s, selected: s == selection)
-                                .onTapGesture { router.settings = s }
+                            // A real button so VoiceOver and keyboard users can pick the page too.
+                            Button { router.settings = s } label: { SidebarItem(section: s, selected: s == selection) }
+                                .buttonStyle(.plain)
                         }
                     }
                 }
@@ -150,7 +151,7 @@ struct SettingsPage: View {
     private var subtitle: String {
         switch section {
         case .general: return ""
-        case .ai: return "Your keys stay in your Keychain."
+        case .ai: return "Your key stays in your Keychain."
         case .voice: return ""
         case .microphone: return ""
         case .dictation: return ""
@@ -168,7 +169,7 @@ struct SettingsPage: View {
         case .ai: AIPage()
         case .voice: VoicePage()
         case .microphone: MicrophonePage()
-        case .dictation: ComingSoon(text: "System-wide dictation with AI clean-up is on the roadmap (Phase 6).")
+        case .dictation: DictationPage()
         case .shortcuts: ShortcutsPage()
         case .cursor: CursorPage()
         case .permissions: PermissionsPage()
@@ -178,19 +179,19 @@ struct SettingsPage: View {
     }
 }
 
-private struct ComingSoon: View {
-    let text: String
+private struct DictationPage: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            MascotView(size: 36)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Coming soon").font(.system(size: 13, weight: .semibold))
-                Text(text).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+        SettingsGroup(title: "Dictate anywhere") {
+            SettingsRow(title: "Hold to dictate", subtitle: "In any text box, hold Control + Shift, speak, then let go. Your words are typed where the cursor is.") {
+                KeyCaps(keys: ["⌃ control", "⇧ shift"])
+            }
+            SettingsRow(title: "Speech to text", subtitle: "Uses the engine chosen in Microphone, so it can run privately on your Mac.") {
+                Button("Microphone") { HomeRouter.shared.settings = .microphone }.buttonStyle(ChipStyle())
+            }
+            SettingsRow(title: "Permissions", subtitle: "Needs Microphone to hear you and Accessibility to type into other apps.", last: true) {
+                Button("Permissions") { HomeRouter.shared.settings = .permissions }.buttonStyle(ChipStyle())
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
     }
 }
 
@@ -222,74 +223,53 @@ private struct GeneralPage: View {
 
 private struct AIPage: View {
     @ObservedObject var settings = AppSettings.shared
-    @AppStorage("provider") private var provider = LLMProvider.anthropic.rawValue
-    @AppStorage("anthropicModel") private var anthropicModel = LLMProvider.anthropic.defaultModel
-    @AppStorage("openaiModel") private var openaiModel = LLMProvider.openai.defaultModel
-    @AppStorage("openrouterModel") private var openrouterModel = LLMProvider.openrouter.defaultModel
-    @State private var openrouterModels: [String] = []
-    @State private var loading = false
-    @AppStorage("quickReplies") private var quickReplies = true
 
     var body: some View {
-        SettingsGroup(title: "Provider") {
-            ForEach(LLMProvider.allCases) { p in
-                SettingsRow(title: p.displayName, subtitle: blurb(p), last: p == LLMProvider.allCases.last) {
-                    Image(systemName: provider == p.rawValue ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 16))
-                        .foregroundStyle(provider == p.rawValue ? Theme.accent : Theme.textTertiary)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { provider = p.rawValue }
-            }
-        }
-
         SettingsGroup(title: "Model") {
-            switch LLMProvider(rawValue: provider) ?? .anthropic {
-            case .anthropic:
-                SettingsRow(title: "Claude model", last: true) { TextField("", text: $anthropicModel).settingsField() }
-            case .openai:
-                SettingsRow(title: "OpenAI model", last: true) { TextField("", text: $openaiModel).settingsField() }
-            case .openrouter:
-                SettingsRow(title: "OpenRouter model", subtitle: "Must accept images so it can see your screen.") {
-                    TextField("", text: $openrouterModel).settingsField()
-                }
-                SettingsRow(title: "Browse models", subtitle: openrouterModels.isEmpty ? "Load the list of vision models from OpenRouter." : "\(openrouterModels.count) models can see images.", last: true) {
-                    if openrouterModels.isEmpty {
-                        Button(loading ? "Loading…" : "Load models") {
-                            loading = true
-                            Task { openrouterModels = await OpenRouterCatalog.visionModels(); loading = false }
-                        }
+            SettingsRow(title: PerchModel.name, subtitle: "Used for everything: talking, acting on your screen, helpers and fixing text. It runs on your OpenRouter key.", last: true) {
+                EmptyView()
+            }
+        }
+
+        SettingsGroup(title: "API key") {
+            SettingsRow(title: "OpenRouter", subtitle: nil) {
+                SecureField("sk-or-…", text: $settings.openrouterKey).settingsField()
+            }
+            SettingsRow(title: "Status", subtitle: nil, last: true) {
+                HStack(spacing: 8) {
+                    KeyStatusLabel()
+                    Button("Check key") { OpenRouterKeyCheck.shared.check() }
                         .buttonStyle(ChipStyle(light: true))
-                    } else {
-                        Picker("", selection: $openrouterModel) {
-                            if !openrouterModels.contains(openrouterModel) { Text(openrouterModel).tag(openrouterModel) }
-                            ForEach(openrouterModels, id: \.self) { Text($0).tag($0) }
-                        }
-                        .labelsHidden().frame(width: 240)
-                    }
+                        .disabled(settings.openrouterKey.isEmpty)
                 }
             }
         }
+        Link("Get a key at openrouter.ai/keys", destination: URL(string: "https://openrouter.ai/keys")!)
+            .font(.system(size: 11))
+    }
+}
 
-        SettingsGroup(title: "Speed") {
-            SettingsRow(title: "Quick replies", subtitle: "Faster model for spoken answers. Helpers still use your main model.", last: true) {
-                Toggle("", isOn: $quickReplies).toggleStyle(GlassToggleStyle())
+/// The OpenRouter key's real state. Checks it once when first shown.
+struct KeyStatusLabel: View {
+    @ObservedObject var settings = AppSettings.shared
+    @ObservedObject var check = OpenRouterKeyCheck.shared
+
+    var body: some View {
+        Group {
+            if settings.openrouterKey.isEmpty {
+                Label("No key", systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            } else {
+                switch check.state {
+                case .unchecked: Label("Not checked", systemImage: "questionmark.circle").foregroundStyle(Theme.textSecondary)
+                case .checking: Label("Checking…", systemImage: "hourglass").foregroundStyle(Theme.textSecondary)
+                case .valid: Label("Valid", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .invalid: Label("Invalid key", systemImage: "xmark.circle.fill").foregroundStyle(.red)
+                case .unreachable(let why): Label("Couldn't check", systemImage: "wifi.exclamationmark").foregroundStyle(.orange).help(why)
+                }
             }
         }
-
-        SettingsGroup(title: "API keys") {
-            SettingsRow(title: "Anthropic", subtitle: nil) { SecureField("sk-ant-…", text: $settings.anthropicKey).settingsField() }
-            SettingsRow(title: "OpenAI", subtitle: nil) { SecureField("sk-…", text: $settings.openaiKey).settingsField() }
-            SettingsRow(title: "OpenRouter", subtitle: nil, last: true) { SecureField("sk-or-…", text: $settings.openrouterKey).settingsField() }
-        }
-    }
-
-    private func blurb(_ p: LLMProvider) -> String {
-        switch p {
-        case .anthropic: return "Claude, straight from Anthropic."
-        case .openai: return "GPT models from OpenAI."
-        case .openrouter: return "One key for hundreds of models: Claude, GPT, Gemini, Grok…"
-        }
+        .font(.system(size: 12))
+        .onAppear { if !settings.openrouterKey.isEmpty, check.state == .unchecked { check.check() } }
     }
 }
 
@@ -298,8 +278,8 @@ private struct VoicePage: View {
     @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
     @AppStorage("voiceSpeed") private var voiceSpeed = 1.0
     @State private var previewing = false
-    @AppStorage("openaiVoice") private var openaiVoice = "alloy"
-    @AppStorage("systemVoiceID") private var systemVoiceID = ""
+    /// Its own speaker, so the button can wait for the preview to finish.
+    @MainActor private static let previewSpeaker = Speaker()
 
     var body: some View {
         SettingsGroup(title: "Speaking") {
@@ -327,11 +307,12 @@ private struct VoicePage: View {
                         Button(previewing ? "…" : "Play") {
                             previewing = true
                             Task {
-                                Companion.shared.announce("Hey! I'm Perch. This is how I sound now. Better, right?")
+                                await Self.previewSpeaker.speak("Hey! I'm Perch. This is how I sound now. Better, right?")
                                 previewing = false
                             }
                         }
                         .buttonStyle(ChipStyle(light: true))
+                        .disabled(previewing)
                     }
                 }
             }
@@ -406,7 +387,7 @@ private struct ShortcutsPage: View {
     var body: some View {
         SettingsGroup(title: "Talk & type") {
             SettingsRow(title: "Talk to Perch", subtitle: "Hold, speak, release.") { KeyCaps(keys: ["⌃ control", "⌥ option"]) }
-            SettingsRow(title: "Type to Perch", subtitle: "Opens the box in the notch.", last: true) { KeyCaps(keys: ["⌃ control", "⌃ control"]) }
+            SettingsRow(title: "Type to Perch", subtitle: "Double-tap Control to open the box in the notch.", last: true) { KeyCaps(keys: ["⌃ control", "⌃ control"]) }
         }
         SettingsGroup(title: "In any text box") {
             SettingsRow(title: "Dictate", subtitle: "Hold, speak, and your words are typed where the cursor is.") { KeyCaps(keys: ["⌃ control", "⇧ shift"]) }
@@ -479,7 +460,7 @@ private struct PermissionsPage: View {
                 ScreenCapture.requestPermission()
                 PermissionGuide.open(.screen)
             }
-            PermissionRow(title: "Accessibility", subtitle: "For the Control + Option shortcut.", granted: permissions.accessibility, last: true) {
+            PermissionRow(title: "Accessibility", subtitle: "For the shortcuts, and so I can click and type for you.", granted: permissions.accessibility, last: true) {
                 _ = PushToTalkMonitor.hasAccessibility(prompt: true)
                 PermissionGuide.open(.accessibility)
             }
@@ -526,24 +507,6 @@ struct PermissionRow: View {
                 Button("Grant", action: action).buttonStyle(ChipStyle(light: true))
             }
         }
-    }
-}
-
-/// Lists OpenRouter models that accept image input (needed to see the screen).
-enum OpenRouterCatalog {
-    static func visionModels() async -> [String] {
-        guard let url = URL(string: "https://openrouter.ai/api/v1/models"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = obj["data"] as? [[String: Any]] else { return [] }
-        return models.compactMap { m -> String? in
-            guard let id = m["id"] as? String, !id.hasSuffix(":batch"),
-                  let arch = m["architecture"] as? [String: Any],
-                  let inputs = arch["input_modalities"] as? [String],
-                  inputs.contains("image") else { return nil }
-            return id
-        }
-        .sorted()
     }
 }
 

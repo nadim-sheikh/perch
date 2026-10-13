@@ -71,7 +71,15 @@ final class GroupStore: ObservableObject {
         Task {
             let plan = await Coordinator.split(text, among: members)
             planning.remove(id)
-            assign(plan.isEmpty ? [(members[0].id, text)] : plan, in: id)
+            if let plan, !plan.isEmpty {
+                assign(plan, in: id)
+            } else {
+                let note = plan == nil
+                    ? "I couldn't split up the work this time, so \(members[0].name) is taking all of it. Use @Name to pick someone else."
+                    : "Nobody got a part when I split the work, so \(members[0].name) is taking all of it. Use @Name to pick someone else."
+                mutate(id) { $0.posts.append(.init(kind: .note, text: note)) }
+                assign([(members[0].id, text)], in: id)
+            }
         }
     }
 
@@ -100,8 +108,8 @@ final class GroupStore: ObservableObject {
 /// Uses the buddy's AI model to split a request among helpers.
 @MainActor
 enum Coordinator {
-    static func split(_ request: String, among members: [BuddyAgent]) async -> [(slug: String, task: String)] {
-        let settings = AppSettings.shared
+    /// The plan, or nil when the model's answer couldn't be read.
+    static func split(_ request: String, among members: [BuddyAgent]) async -> [(slug: String, task: String)]? {
         let roster = members.map { "- \($0.id): \($0.name), \($0.role). \($0.oneLiner)" }.joined(separator: "\n")
         let prompt = """
         Split this request among the helpers below so each does a distinct, self-contained part that plays to their role.
@@ -112,21 +120,49 @@ enum Coordinator {
 
         Request: \(request)
         """
-        let client = LLMClient(provider: settings.provider, apiKey: settings.activeKey, model: settings.activeModel)
+        let client = LLMClient()
         var out = ""
         do {
             for try await chunk in client.stream(system: "You plan work for a small team. Output JSON only.", history: [], prompt: prompt, screens: []) {
                 out += chunk
             }
-        } catch { return [] }
-        guard let start = out.firstIndex(of: "["), let end = out.lastIndex(of: "]"),
-              let data = String(out[start...end]).data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        } catch { return nil }
         let valid = Set(members.map(\.id))
-        return arr.compactMap { item in
-            guard let slug = item["slug"] as? String, valid.contains(slug), let task = item["task"] as? String else { return nil }
-            return (slug, task)
+        for candidate in jsonArrays(in: out) {
+            guard let data = candidate.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { continue }
+            let plan = arr.compactMap { item -> (slug: String, task: String)? in
+                guard let slug = item["slug"] as? String, valid.contains(slug), let task = item["task"] as? String,
+                      !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return (slug, task)
+            }
+            if !plan.isEmpty || arr.isEmpty { return plan }
         }
+        return nil
+    }
+
+    /// Every top-level [...] in the text, in order, skipping brackets inside JSON strings. Code fences are ignored.
+    static func jsonArrays(in text: String) -> [String] {
+        let chars = Array(text.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: ""))
+        var out: [String] = []
+        var depth = 0, start = 0, inString = false, escaped = false
+        for (i, c) in chars.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"" where depth > 0: inString = true
+            case "[":
+                if depth == 0 { start = i }
+                depth += 1
+            case "]" where depth > 0:
+                depth -= 1
+                if depth == 0 { out.append(String(chars[start...i])) }
+            default: break
+            }
+        }
+        return out
     }
 }
 

@@ -59,13 +59,24 @@ struct GlassPillStyle: ButtonStyle {
 struct ChipStyle: ButtonStyle {
     var light = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(light ? Color.black : Theme.textPrimary.opacity(0.85))
-            .padding(.horizontal, 12)
-            .frame(height: 28)
-            .background(Capsule().fill(light ? Color.white.opacity(0.92) : Theme.card))
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        ChipBody(configuration: configuration, light: light)
+    }
+
+    /// A view, so it can read whether the button is disabled and dim itself.
+    private struct ChipBody: View {
+        let configuration: ButtonStyleConfiguration
+        let light: Bool
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(light ? Color.black : Theme.textPrimary.opacity(0.85))
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background(Capsule().fill(light ? Color.white.opacity(0.92) : Theme.card))
+                .opacity(configuration.isPressed ? 0.7 : isEnabled ? 1 : 0.45)
+        }
     }
 }
 

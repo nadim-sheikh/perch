@@ -11,8 +11,8 @@ enum Migration {
         }
         if !d.bool(forKey: "migratedDefaultsFromOpenBuddy"), let old = UserDefaults(suiteName: "dev.openbuddy.app") {
             let keys = ["provider", "anthropicModel", "openaiModel", "openrouterModel", "voiceEngine", "openaiVoice",
-                        "systemVoiceID", "cursorColorHex", "buddyName", "followCursor", "showInDock", "showInRecordings",
-                        "notchPeek", "agentAuthMode", "agentModel", "agentSounds", "speakAgentUpdates"]
+                        "cursorColorHex", "buddyName", "followCursor", "showInDock", "showInRecordings",
+                        "notchPeek", "agentModel", "agentSounds", "speakAgentUpdates"]
             for k in keys { if let v = old.object(forKey: k), d.object(forKey: k) == nil { d.set(v, forKey: k) } }
             d.set(true, forKey: "migratedDefaultsFromOpenBuddy")
         }

@@ -4,14 +4,17 @@ import AppKit
 /// - Hold Control+Option: talk to Perch.
 /// - Double-tap Control: open the type box in the notch.
 /// - Hold Control+Shift: dictate into the focused text field.
-/// - Press Control+Option+F: fix spelling in the focused text field.
+/// (Option+Shift+U, fix spelling, is a `CarbonHotKey` registered in main.swift.)
 ///
 /// Hold combos start on a short delay, and any key press cancels a pending hold,
-/// so a shortcut like Ctrl+Option+F never accidentally starts voice listening.
+/// so a shortcut like Ctrl+Option+T never accidentally starts voice listening. A key
+/// pressed while already listening cancels the listen instead of sending it.
 @MainActor
 final class PushToTalkMonitor {
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
+    /// Talk combo turned out to be part of a shortcut: drop the listen without sending it.
+    var onCancelTalk: (() -> Void)?
     var onDoubleTapControl: (() -> Void)?
     var onDictateStart: (() -> Void)?
     var onDictateEnd: (() -> Void)?
@@ -19,6 +22,7 @@ final class PushToTalkMonitor {
     private var controlDownAt: Date?
     private var lastControlTapAt: Date?
     private var otherKeyDuringControl = false
+    private var lastFlags: NSEvent.ModifierFlags = []
 
     private var monitors: [Any] = []
 
@@ -92,13 +96,22 @@ final class PushToTalkMonitor {
         // A real key press means the user is doing a shortcut, not holding to talk.
         pendingTalk?.cancel(); pendingTalk = nil
         pendingDictate?.cancel(); pendingDictate = nil
-
-        _ = event
+        if talkActive && event.modifierFlags.contains(talkCombo) {
+            talkActive = false
+            onCancelTalk?()
+        }
+        // Ctrl+A then Ctrl+E is typing, not a double-tap.
+        otherKeyDuringControl = true
+        lastControlTapAt = nil
     }
 
     private func detectControlDoubleTap(_ flags: NSEvent.ModifierFlags) {
         let now = Date()
+        let previous = lastFlags
+        lastFlags = flags
         if flags == [.control] {
+            // Only a fresh press starts a tap, not letting go of another modifier.
+            guard previous.isEmpty else { return }
             controlDownAt = now
             otherKeyDuringControl = false
         } else if flags.isEmpty, let down = controlDownAt {
@@ -110,9 +123,10 @@ final class PushToTalkMonitor {
             } else {
                 lastControlTapAt = now
             }
-        } else {
+        } else if !flags.isEmpty {
             otherKeyDuringControl = true
             controlDownAt = nil
+            lastControlTapAt = nil
         }
     }
 

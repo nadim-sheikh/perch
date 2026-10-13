@@ -11,11 +11,12 @@
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>14.2</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Perch listens while you hold the talk hotkey so you can ask questions by voice.</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>Perch turns your voice into text so it can answer you.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Perch controls apps like Chrome, Finder and Mail when you ask it to.</string>
     <key>NSScreenCaptureUsageDescription</key><string>Perch looks at your screen when you ask a question so it can help with what you see.</string>
 </dict>
 </plist>

@@ -4,37 +4,18 @@ import SwiftUI
 struct AgentsSettingsPage: View {
     @ObservedObject var roster = AgentRoster.shared
     @ObservedObject var settings = AppSettings.shared
-    @AppStorage("agentAuthMode") private var authMode = AgentAuthMode.claudeLogin.rawValue
-    @AppStorage("agentModel") private var agentModel = ""
     @AppStorage("agentSounds") private var sounds = true
     @AppStorage("speakAgentUpdates") private var speak = true
-    @State private var cliPath = ClaudeCodeRun.locateCLI()
 
     var body: some View {
         SettingsGroup(title: "Engine") {
-            SettingsRow(title: "Claude Code", subtitle: cliPath == nil
-                        ? "Helpers run on Claude Code, which isn't installed yet."
-                        : "Helpers run on your own Claude Code at \(cliPath!).") {
-                if cliPath == nil {
-                    Button("Install…") { NSWorkspace.shared.open(URL(string: "https://www.anthropic.com/claude-code")!) }
-                        .buttonStyle(ChipStyle(light: true))
-                } else {
-                    Label("Found", systemImage: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(.green)
-                }
+            SettingsRow(title: "OpenRouter", subtitle: settings.openrouterKey.isEmpty
+                        ? "Helpers run on your OpenRouter key. Add it in AI Models first."
+                        : "Helpers run on your OpenRouter key.") {
+                KeyStatusLabel()
             }
-            SettingsRow(title: "Sign in with", subtitle: authHelp) {
-                Picker("", selection: $authMode) {
-                    ForEach(AgentAuthMode.allCases) { Text($0.title).tag($0.rawValue) }
-                }
-                .labelsHidden().frame(width: 200)
-            }
-            if authMode == AgentAuthMode.claudeLogin.rawValue {
-                SettingsRow(title: "Claude login", subtitle: nil) {
-                    Button("Sign in…") { openClaudeLogin() }.buttonStyle(ChipStyle(light: true))
-                }
-            }
-            SettingsRow(title: "Model", subtitle: "Empty = default.", last: true) {
-                TextField("default", text: $agentModel).settingsField()
+            SettingsRow(title: "Model", subtitle: "Every helper, and the buddy, use the same model.", last: true) {
+                Text(PerchModel.name).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
             }
         }
 
@@ -60,24 +41,6 @@ struct AgentsSettingsPage: View {
             Button { NSWorkspace.shared.open(AgentPaths.agents) } label: { Label("Open helpers folder", systemImage: "folder") }
                 .buttonStyle(ChipStyle())
         }
-    }
-
-    private var authHelp: String {
-        switch AgentAuthMode(rawValue: authMode) ?? .claudeLogin {
-        case .claudeLogin: return "Uses your Claude subscription through Claude Code."
-        case .anthropicKey: return settings.anthropicKey.isEmpty ? "Add your Anthropic key in AI Models first." : "Uses the Anthropic key from AI Models."
-        case .openrouterKey: return settings.openrouterKey.isEmpty ? "Add your OpenRouter key in AI Models first." : "Uses the OpenRouter key from AI Models."
-        }
-    }
-
-    private func openClaudeLogin() {
-        let env = AgentSettings.environment()
-        let script = "#!/bin/zsh\nexport PATH=\"\(env["PATH"] ?? "")\"\necho 'Type /login and follow the steps, then /exit.'\nclaude\n"
-        let url = AgentPaths.root.appendingPathComponent("claude-login.command")
-        try? FileManager.default.createDirectory(at: AgentPaths.root, withIntermediateDirectories: true)
-        try? script.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        NSWorkspace.shared.open(url)
     }
 }
 
@@ -126,12 +89,14 @@ struct IntegrationsSettingsPage: View {
 
     private var categories: [String] { ["All"] + Array(Set(ConnectorCatalog.all.map(\.category))).sorted() }
 
+    /// Apps helpers can use come first; "Coming soon" ones follow.
     private var catalog: [ConnectorDefinition] {
-        ConnectorCatalog.all.filter { def in
+        let matches = ConnectorCatalog.all.filter { def in
             !store.isEnabled(def.id)
                 && (category == "All" || def.category == category)
                 && (search.isEmpty || def.name.lowercased().contains(search.lowercased()))
         }
+        return matches.filter(\.usableByAgents) + matches.filter { !$0.usableByAgents }
     }
 
     var body: some View {
@@ -156,8 +121,8 @@ struct IntegrationsSettingsPage: View {
                     SettingsRow(title: def.name, subtitle: statusText(def), last: def.id == store.enabled.last?.id) {
                         HStack(spacing: 6) {
                             ConnectorLogo(def: def, size: 22)
-                            if store.status[def.id] == .needsSignIn {
-                                Button("Sign in") { store.signInAgain(def) }.buttonStyle(ChipStyle(light: true))
+                            if hasSecrets(def) {
+                                Button(tokenLabel(def)) { secretSheet = def }.buttonStyle(ChipStyle())
                             }
                             Button("Disconnect") { store.disconnect(def) }.buttonStyle(ChipStyle())
                         }
@@ -171,16 +136,13 @@ struct IntegrationsSettingsPage: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 10)], spacing: 10) {
             ForEach(catalog) { def in
                 ConnectorCard(def: def) {
-                    switch def.auth {
-                    case .token, .env: secretSheet = def
-                    default: store.connect(def)
-                    }
+                    if hasSecrets(def) { secretSheet = def } else { store.connect(def) }
                 }
             }
             CustomConnectorCard { showCustom = true }
         }
 
-        Text("Sign-in opens in Terminal. Tokens stay in your Keychain.")
+        Text("Tokens stay in your Keychain. Apps marked Coming soon need a browser sign-in, which helpers can't use yet.")
             .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             .onAppear { store.refreshStatus() }
             .sheet(item: $secretSheet) { def in SecretSheet(def: def) { secretSheet = nil } }
@@ -188,13 +150,25 @@ struct IntegrationsSettingsPage: View {
     }
 
     private func statusText(_ def: ConnectorDefinition) -> String {
+        guard def.usableByAgents else { return ConnectorStore.browserSignInNote }
         switch store.status[def.id] ?? .unknown {
         case .connected: return "Connected"
         case .checking: return "Checking…"
-        case .needsSignIn: return "Needs sign-in"
         case .failed(let m): return "Problem: \(m)"
         case .unknown: return def.blurb
         }
+    }
+
+    private func hasSecrets(_ def: ConnectorDefinition) -> Bool {
+        switch def.auth {
+        case .token, .env: return true
+        case .none, .browser: return false
+        }
+    }
+
+    private func tokenLabel(_ def: ConnectorDefinition) -> String {
+        if case .env(let names, _) = def.auth, names.count > 1 { return "Change keys" }
+        return "Change token"
     }
 }
 
@@ -208,7 +182,12 @@ private struct ConnectorCard: View {
             HStack {
                 ConnectorLogo(def: def, size: 32)
                 Spacer()
-                Button("Connect", action: onConnect).buttonStyle(ChipStyle(light: true))
+                if def.usableByAgents {
+                    Button("Connect", action: onConnect).buttonStyle(ChipStyle(light: true))
+                } else {
+                    Text("Coming soon").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textTertiary)
+                        .help("Needs a browser sign-in, which helpers can't use yet.")
+                }
             }
             Text(def.name).font(.system(size: 12.5, weight: .semibold))
             Text(def.blurb).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(2)
@@ -217,9 +196,10 @@ private struct ConnectorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(hovering ? Theme.hover : Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.cardStroke))
+        .opacity(def.usableByAgents ? 1 : 0.55)
         .scaleEffect(hovering ? 1.015 : 1)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hovering)
-        .onHover { hovering = $0 }
+        .onHover { hovering = $0 && def.usableByAgents }
     }
 }
 
@@ -263,7 +243,8 @@ private struct SecretSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Connect \(def.name)").font(.system(size: 16, weight: .bold))
+            Text(ConnectorStore.shared.isEnabled(def.id) ? "Change \(def.name) token" : "Connect \(def.name)")
+                .font(.system(size: 16, weight: .bold))
             Text(help).font(.system(size: 12)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
             ForEach(names, id: \.self) { n in
                 SecureField(n == "TOKEN" ? "Token" : n, text: Binding(get: { values[n] ?? "" }, set: { values[n] = $0 }))
@@ -272,12 +253,12 @@ private struct SecretSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onDone).buttonStyle(ChipStyle())
-                Button("Connect") {
+                Button(ConnectorStore.shared.isEnabled(def.id) ? "Save" : "Connect") {
                     ConnectorStore.shared.connect(def, secrets: values)
                     onDone()
                 }
                 .buttonStyle(GlassPillStyle(height: 28))
-                .disabled(names.contains { (values[$0] ?? "").isEmpty })
+                .disabled(names.contains { (values[$0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
             }
         }
         .padding(22).frame(width: 420).background(Theme.window).preferredColorScheme(.dark)
@@ -291,7 +272,7 @@ private struct CustomConnectorSheet: View {
     @State private var url = ""
     @State private var command = ""
     @State private var argsText = ""
-    @State private var authKind = 0   // 0 none, 1 browser, 2 token
+    @State private var useToken = false
     @State private var token = ""
 
     var body: some View {
@@ -305,16 +286,15 @@ private struct CustomConnectorSheet: View {
             .pickerStyle(.segmented).labelsHidden().frame(width: 300)
             if remote {
                 TextField("https://example.com/mcp", text: $url).settingsField()
-                Picker("Sign-in", selection: $authKind) {
-                    Text("None").tag(0)
-                    Text("Browser sign-in").tag(1)
-                    Text("API key").tag(2)
+                Picker("Sign-in", selection: $useToken) {
+                    Text("None").tag(false)
+                    Text("API key").tag(true)
                 }
                 .frame(width: 260)
-                if authKind == 2 { SecureField("API key (sent as Bearer token)", text: $token).settingsField() }
+                if useToken { SecureField("API key (sent as Bearer token)", text: $token).settingsField() }
             } else {
                 TextField("Command, e.g. npx", text: $command).settingsField()
-                TextField("Arguments, e.g. -y some-mcp-server", text: $argsText).settingsField()
+                TextField("Arguments, e.g. -y some-mcp-server \"my folder\"", text: $argsText).settingsField()
             }
             HStack {
                 Spacer()
@@ -322,19 +302,49 @@ private struct CustomConnectorSheet: View {
                 Button("Add") {
                     let store = ConnectorStore.shared
                     if remote {
-                        let auth: ConnectorDefinition.Auth = authKind == 1 ? .browser
-                            : authKind == 2 ? .token(header: "Authorization", prefix: "Bearer ", help: "") : .none
-                        store.addCustom(name: name, transport: .http(url: url), auth: auth, secrets: authKind == 2 ? ["TOKEN": token] : [:])
+                        let auth: ConnectorDefinition.Auth = useToken ? .token(header: "Authorization", prefix: "Bearer ", help: "") : .none
+                        store.addCustom(name: name, transport: .http(url: url.trimmingCharacters(in: .whitespaces)), auth: auth,
+                                        secrets: useToken ? ["TOKEN": token] : [:])
                     } else {
-                        let args = argsText.split(separator: " ").map(String.init)
-                        store.addCustom(name: name, transport: .stdio(command: command, args: args), auth: .none, secrets: [:])
+                        store.addCustom(name: name, transport: .stdio(command: command.trimmingCharacters(in: .whitespaces),
+                                                                      args: Self.splitArguments(argsText)),
+                                        auth: .none, secrets: [:])
                     }
                     onDone()
                 }
                 .buttonStyle(GlassPillStyle(height: 28))
-                .disabled(name.isEmpty || (remote ? !url.hasPrefix("http") : command.isEmpty))
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
+                          || (remote ? !url.hasPrefix("http") || (useToken && token.isEmpty) : command.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
         .padding(22).frame(width: 440).background(Theme.window).preferredColorScheme(.dark)
+    }
+
+    /// Splits arguments like a shell does: spaces separate them, quotes ('…' or "…") keep spaces,
+    /// and a backslash escapes the next character (except inside single quotes).
+    static func splitArguments(_ text: String) -> [String] {
+        var args: [String] = []
+        var current = ""
+        var inArg = false
+        var quote: Character?
+        var escaped = false
+        for c in text {
+            if escaped { current.append(c); escaped = false; inArg = true; continue }
+            if c == "\\" && quote != "'" { escaped = true; inArg = true; continue }
+            if let q = quote {
+                if c == q { quote = nil } else { current.append(c) }
+                continue
+            }
+            if c == "'" || c == "\"" { quote = c; inArg = true; continue }
+            if c.isWhitespace {
+                if inArg { args.append(current); current = ""; inArg = false }
+                continue
+            }
+            current.append(c)
+            inArg = true
+        }
+        if escaped { current.append("\\") }
+        if inArg { args.append(current) }
+        return args
     }
 }

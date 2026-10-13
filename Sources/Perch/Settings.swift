@@ -2,25 +2,11 @@ import Foundation
 import Security
 import SwiftUI
 
-enum LLMProvider: String, CaseIterable, Identifiable {
-    case anthropic
-    case openai
-    case openrouter
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .anthropic: return "Claude (Anthropic)"
-        case .openai: return "OpenAI"
-        case .openrouter: return "OpenRouter (any model)"
-        }
-    }
-    var defaultModel: String {
-        switch self {
-        case .anthropic: return "claude-sonnet-5-5"
-        case .openai: return "gpt-4o"
-        case .openrouter: return "anthropic/claude-sonnet-5.5"
-        }
-    }
+/// The one model Perch uses for everything: talking, acting on the screen, helpers, squads and
+/// fixing text. It runs on the user's OpenRouter key and can see screenshots and call tools.
+enum PerchModel {
+    static let id = "z-ai/glm-5.3-flash"
+    static let name = "GLM 5.3 Flash"
 }
 
 enum VoiceEngine: String, CaseIterable, Identifiable {
@@ -72,31 +58,20 @@ enum Keychain {
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
-    @AppStorage("provider") var providerRaw: String = LLMProvider.anthropic.rawValue
-    @AppStorage("anthropicModel") var anthropicModel: String = LLMProvider.anthropic.defaultModel
-    @AppStorage("openaiModel") var openaiModel: String = LLMProvider.openai.defaultModel
-    @AppStorage("openrouterModel") var openrouterModel: String = LLMProvider.openrouter.defaultModel
     @AppStorage("voiceEngine") var voiceEngineRaw: String = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") var kokoroVoice: String = "af_heart"
-    @AppStorage("openaiVoice") var openaiVoice: String = "alloy"
-    @AppStorage("systemVoiceID") var systemVoiceID: String = ""
     @AppStorage("cursorColorHex") var cursorColorHex: String = "#3B82F6"
     @AppStorage("buddyName") var buddyName: String = "Perch"
     @AppStorage("followCursor") var followCursor: Bool = true
 
-    @Published var anthropicKey: String = Keychain.get("anthropic") {
-        didSet { Keychain.set(anthropicKey, for: "anthropic") }
-    }
-    @Published var openaiKey: String = Keychain.get("openai") {
-        didSet { Keychain.set(openaiKey, for: "openai") }
-    }
-    @Published var openrouterKey: String = Keychain.get("openrouter") {
-        didSet { Keychain.set(openrouterKey, for: "openrouter") }
-    }
-
-    var provider: LLMProvider {
-        get { LLMProvider(rawValue: providerRaw) ?? .anthropic }
-        set { providerRaw = newValue.rawValue }
+    /// Pasted keys often carry a trailing space or newline, which makes every request fail with 401.
+    @Published var openrouterKey: String = Keychain.get("openrouter").trimmingCharacters(in: .whitespacesAndNewlines) {
+        didSet {
+            let trimmed = openrouterKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed != openrouterKey { openrouterKey = trimmed }
+            Keychain.set(openrouterKey, for: "openrouter")
+            if openrouterKey != oldValue { Task { @MainActor in OpenRouterKeyCheck.shared.reset() } }
+        }
     }
 
     var voiceEngine: VoiceEngine {
@@ -106,31 +81,48 @@ final class AppSettings: ObservableObject {
 
     var cursorColor: Color { Color(hex: cursorColorHex) ?? .blue }
 
-    /// "Quick replies" uses a faster model for the buddy's spoken answers.
-    var replyModel: String {
-        guard UserDefaults.standard.object(forKey: "quickReplies") as? Bool ?? true else { return activeModel }
-        switch provider {
-        case .anthropic: return "claude-haiku-5-5"
-        case .openrouter: return "anthropic/claude-haiku-5.5"
-        case .openai: return "gpt-4o-mini"
-        }
+    var hasKey: Bool { !openrouterKey.isEmpty }
+}
+
+/// Asks OpenRouter whether the saved key works, so Settings can say so honestly.
+@MainActor
+final class OpenRouterKeyCheck: ObservableObject {
+    static let shared = OpenRouterKeyCheck()
+
+    enum State: Equatable { case unchecked, checking, valid, invalid, unreachable(String) }
+
+    @Published private(set) var state: State = .unchecked
+    private var generation = 0
+
+    func reset() {
+        generation += 1
+        state = .unchecked
     }
 
-    var activeModel: String {
-        switch provider {
-        case .anthropic: return anthropicModel
-        case .openai: return openaiModel
-        case .openrouter: return openrouterModel
-        }
-    }
-
-    var hasAnyKey: Bool { !anthropicKey.isEmpty || !openaiKey.isEmpty || !openrouterKey.isEmpty }
-
-    var activeKey: String {
-        switch provider {
-        case .anthropic: return anthropicKey
-        case .openai: return openaiKey
-        case .openrouter: return openrouterKey
+    func check() {
+        let key = AppSettings.shared.openrouterKey
+        generation += 1
+        let gen = generation
+        guard !key.isEmpty, let url = URL(string: "https://openrouter.ai/api/v1/key") else { state = .unchecked; return }
+        state = .checking
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        Task {
+            let result: State
+            do {
+                let (_, response) = try await URLSession.shared.data(for: req)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                switch code {
+                case 200..<300: result = .valid
+                case 401, 403: result = .invalid
+                default: result = .unreachable("OpenRouter answered HTTP \(code).")
+                }
+            } catch {
+                result = .unreachable(error.localizedDescription)
+            }
+            // A newer key or check replaced this one.
+            guard gen == generation else { return }
+            state = result
         }
     }
 }

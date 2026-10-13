@@ -43,7 +43,7 @@ final class OverlayManager {
         panels.forEach { $0.orderOut(nil) }
         panels = NSScreen.screens.map { screen in
             let panel = OverlayPanel(screen: screen)
-            let view = BuddyOverlayView(screenFrame: screen.frame)
+            let view = BuddyOverlayView(screenFrame: screen.frame, holdsNotch: screen == NotchController.hostScreen)
                 .environmentObject(BuddyState.shared)
                 .environmentObject(AppSettings.shared)
             panel.contentView = NSHostingView(rootView: view)
@@ -55,6 +55,8 @@ final class OverlayManager {
 
 struct BuddyOverlayView: View {
     let screenFrame: CGRect
+    /// This panel's screen shows the notch island, so the buddy tucks away under it.
+    let holdsNotch: Bool
     @EnvironmentObject var state: BuddyState
     @EnvironmentObject var settings: AppSettings
     @AppStorage("cursorColorHex") private var cursorColorHex = "#3B82F6"
@@ -77,7 +79,7 @@ struct BuddyOverlayView: View {
         GeometryReader { _ in
             if screenFrame.insetBy(dx: -40, dy: -40).contains(state.position) {
                 let local = CGPoint(x: state.position.x - screenFrame.minX, y: screenFrame.maxY - state.position.y)
-                let overNotch = local.y < 44 && abs(local.x - screenFrame.width / 2) < 280 && state.navigation == .following
+                let overNotch = holdsNotch && local.y < 44 && abs(local.x - screenFrame.width / 2) < 280 && state.navigation == .following
                 ZStack(alignment: .topLeading) {
                     BuddyCursor(color: color, phase: state.phase, level: state.audioLevel,
                                 rotation: state.rotation, scale: state.flightScale)

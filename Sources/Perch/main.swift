@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkey.onPress = { [weak self] in self?.companion.beginListening() }
         hotkey.onRelease = { [weak self] in self?.companion.endListening() }
+        hotkey.onCancelTalk = { [weak self] in self?.companion.cancelListening() }
         hotkey.onDoubleTapControl = { NotchModel.shared.openTextInput() }
         hotkey.onDictateStart = { TextTools.shared.startDictation() }
         hotkey.onDictateEnd = { TextTools.shared.endDictation() }
@@ -56,11 +57,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await SpeechRecognizer.requestPermissions()
             if !ScreenCapture.hasPermission() { ScreenCapture.requestPermission() }
             _ = PushToTalkMonitor.hasAccessibility(prompt: true)
-            if AppSettings.shared.activeKey.isEmpty && !CommandLine.arguments.contains("--home") {
+            if !AppSettings.shared.hasKey && !CommandLine.arguments.contains("--home") {
                 HomeRouter.shared.settings = .ai
             }
             showHome()
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Stop helper runs and their child processes so nothing keeps working after Perch quits,
+        // close connected-app servers, and write any chat changes still waiting to be saved.
+        AgentManager.shared.shutdown()
+        MCPPool.shared.closeAll()
+        ConversationStore.shared.flush()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -93,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Home lives inside the notch panel: one shape that grows and shrinks.
     func showHome() {
-        NSApp.activate(ignoringOtherApps: true)
+        // The notch activates Perch itself, after noting which app to hand focus back to.
         NotchModel.shared.openHomePanel()
     }
 
@@ -107,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSettings() {
-        HomeRouter.shared.settings = .general
+        HomeRouter.shared.settings = AppSettings.shared.hasKey ? .general : .ai
         showHome()
     }
 
@@ -123,8 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.appearance = NSAppearance(named: .darkAqua)
+        // Hand focus back to the app the user was in, so the buddy (and any helper) acts there, not on Perch.
+        let previousApp = NSWorkspace.shared.frontmostApplication
         panel.contentView = NSHostingView(rootView: AskField { [weak self, weak panel] text in
             panel?.close()
+            if let previousApp, previousApp != NSRunningApplication.current { previousApp.activate() }
             self?.companion.askTyped(text)
         })
         if let screen = NSScreen.main {
