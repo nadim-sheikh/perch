@@ -55,7 +55,7 @@ enum MarkTags {
     }
 
     private static let anyTag = try! NSRegularExpression(
-        pattern: #"\[(POINT|HIGHLIGHT|CIRCLE|ARROW|DO|AGENT|NEW_AGENT)\s*:[^\]]*\]"#, options: [.caseInsensitive])
+        pattern: #"\[(POINT|HIGHLIGHT|CIRCLE|ARROW|MARK|DO|AGENT|NEW_AGENT)\s*:[^\]]*\]"#, options: [.caseInsensitive])
 
     /// Removes every control tag, and hides a half-streamed one at the end.
     static func stripAll(_ text: String) -> String {

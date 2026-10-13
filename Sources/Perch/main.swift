@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         notch.show()
         IntegrationSuggestions.shared.start()
+        ElementMarks.startTracking()
         if let i = CommandLine.arguments.firstIndex(of: "--say"), i + 1 < CommandLine.arguments.count {
             let line = CommandLine.arguments[i + 1]
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { Companion.shared.announce(line) }

@@ -167,6 +167,13 @@ final class Companion {
             screens = ((try? await ScreenCapture.captureCursorScreen()) ?? nil).map { [$0] } ?? []
             Timing.mark("screenshot ready")
         }
+        // Number the real buttons/menus on screen so marks land exactly (see ElementMarks).
+        var elementMap: ElementMarks.Map?
+        if let first = screens.first, let (map, numbered) = ElementMarks.build(for: first) {
+            elementMap = map
+            screens[0] = numbered
+            Timing.mark("elements: \(map.items.count)")
+        }
         // interrupt() already stopped the speaker; starting live speech now would leave it polling.
         if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
         perchLog.notice("ask: captured \(screens.count) screens, model \(PerchModel.id) key \(settings.hasKey ? "set" : "missing")")
@@ -208,7 +215,19 @@ final class Companion {
         }
         do {
             // Without the trigger word Perch only shows how: a plain, fast reply with markers, no actions.
-            let system = Prompts.system(name: settings.buddyName, screenCount: screens.count) + AgentTrigger.guideInstructions
+            var system = Prompts.system(name: settings.buddyName, screenCount: screens.count) + AgentTrigger.guideInstructions
+            if let map = elementMap {
+                system += """
+
+
+                NUMBERED ELEMENTS. Pink numbers on the screenshot label the real buttons, menus and fields of the \
+                app in front. To show the user something that has a number, use [MARK:number:short label]: it is \
+                placed exactly on that element, so always prefer it. Only use POINT/HIGHLIGHT coordinates for things \
+                that have no number. Never mention the numbers or tags in what you say.
+                Elements (number: role "name" at x,y):
+                \(ElementMarks.promptList(map))
+                """
+            }
             // Spoken replies are short; a tight cap keeps the model from rambling.
             let stream = LLMClient(maxTokens: 350).stream(system: system, history: history, prompt: question, screens: screens)
             for try await chunk in stream {
@@ -233,8 +252,10 @@ final class Companion {
         if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
         refresh()
 
-        let marks = MarkTags.parse(full, screens: screens)
-        let pointTarget = Pointing.firstTarget(in: full)
+        let elementMarks = ElementMarks.marks(in: full, map: elementMap)
+        let marks = elementMarks + ElementMarks.snap(MarkTags.parse(full, screens: screens), map: elementMap)
+        let pointTarget = elementMarks.isEmpty ? Pointing.firstTarget(in: full) : nil
+        DebugLog.write("marks: \(elementMarks.count) by element number, \(marks.count - elementMarks.count) by coordinates, point=\(pointTarget != nil)")
         guard !visible.isEmpty || !marks.isEmpty || pointTarget != nil else {
             // Nothing to say or show: don't save an empty message or count it as an answer.
             speaker.stop()
@@ -250,7 +271,10 @@ final class Companion {
 
         if !marks.isEmpty { state.show(marks: marks) }
         if let target = pointTarget, let screen = screens.first(where: { $0.index == target.screen }) ?? screens.first {
-            state.point(at: screen.globalPoint(fromImagePoint: target.point), label: target.label)
+            // Snap a guessed point onto the real element underneath, if there is one.
+            let guess = screen.globalPoint(fromImagePoint: target.point)
+            let snapped = ElementMarks.element(at: guess, map: elementMap).map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) } ?? guess
+            state.point(at: snapped, label: target.label)
         } else if let first = marks.first {
             state.point(at: first.anchor, label: first.label)
         }
@@ -409,15 +433,38 @@ enum AgentTrigger {
     static func start(_ job: Job, screenshot: CapturedScreen?) -> String {
         let roster = AgentRoster.shared
         let manager = AgentManager.shared
-        let helper: BuddyAgent? = job.helper
-            ?? roster.agents.filter { !$0.archived }.max { manager.lastActivity($0.id) < manager.lastActivity($1.id) }
-            ?? (try? roster.create(name: "Perch Agent", role: "Does anything you ask",
-                                   oneLiner: "Takes on any job you hand over and gets it done."))
+        let helper: BuddyAgent? = job.helper ?? bestHelper(for: job.task)
         guard let helper else { return "I couldn't start a helper just now." }
         manager.registerNewAgent(helper)
         manager.launch(slug: helper.id, prompt: job.task, screenshot: screenshot)
         return ["On it. \(helper.name)'s taking care of that.", "Got it, \(helper.name) is on it.",
                 "Sure thing. Handing that to \(helper.name)."].randomElement()!
+    }
+
+    /// Picks a helper by what the job is, not by who was used last: building goes to the web
+    /// builder, digging into a topic to the researcher, and everything else to a general agent.
+    static func bestHelper(for task: String) -> BuddyAgent? {
+        let roster = AgentRoster.shared
+        let t = task.lowercased()
+        let live = roster.agents.filter { !$0.archived }
+        func has(_ words: [String]) -> Bool { words.contains { t.contains($0) } }
+        if has(["website", "web site", "landing page", "web page", "webpage", "web app", "portfolio", "html", "site for", "build a site", "make a site"]),
+           let web = live.first(where: { $0.id == "shippy" || $0.role.lowercased().contains("web") }) {
+            return web
+        }
+        if has(["research", "find out", "look up", "compare", "report", "summarise", "summarize", "best ", "news", "sources", "learn about"]),
+           let researcher = live.first(where: { $0.id == "research-buddy" || $0.role.lowercased().contains("research") }) {
+            return researcher
+        }
+        // A helper whose role words appear in the task (e.g. "email" for an email helper).
+        if let match = live.first(where: { a in
+            a.role.lowercased().split(separator: " ").contains { $0.count > 3 && t.contains($0) }
+        }), !["shippy", "research-buddy"].contains(match.id) {
+            return match
+        }
+        if let general = live.first(where: { $0.name == "Perch Agent" }) { return general }
+        return try? roster.create(name: "Perch Agent", role: "General agent",
+                                  oneLiner: "Takes on any job you hand over: files, apps, writing, setting things up.")
     }
 
     static var guideInstructions: String {

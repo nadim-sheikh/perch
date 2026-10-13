@@ -182,8 +182,8 @@ enum ComputerControl {
 
     /// Clickable / readable elements in the frontmost app's focused window, then its menu bar
     /// (the top-level menus, plus the items of a menu that is open).
-    static func uiElements(limit: Int = 150) -> [UIElement] {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return [] }
+    static func uiElements(of target: NSRunningApplication? = nil, limit: Int = 150) -> [UIElement] {
+        guard let app = target ?? NSWorkspace.shared.frontmostApplication else { return [] }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         // A busy or hung app must not freeze Perch for seconds per element.
         AXUIElementSetMessagingTimeout(axApp, 0.5)
