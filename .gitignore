@@ -3,4 +3,6 @@ build/
 *.app
 .DS_Store
 ._*
-._*
+
+# Local-only research notes (not part of the app)
+docs/research/

@@ -169,6 +169,11 @@ struct AskField: View {
     }
 }
 
+if let i = CommandLine.arguments.firstIndex(of: "--demo-shots"), i + 1 < CommandLine.arguments.count {
+    MainActor.assumeIsolated { DemoShots.render(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) }
+    exit(0)
+}
+
 Migration.run()
 
 MainActor.assumeIsolated {
