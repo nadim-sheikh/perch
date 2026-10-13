@@ -382,6 +382,7 @@ enum AgentCues {
 
     /// A stopped turn gets no cue: stopping isn't a failure.
     static func finished(_ agent: BuddyAgent, turn: AgentTurn) {
+        AgentTrigger.helperFinished(agent, turn: turn)
         guard turn.state != .stopped else { return }
         let ok = turn.state == .finished
         if soundsOn { NSSound(named: ok ? "Glass" : "Basso")?.play() }

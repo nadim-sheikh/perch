@@ -84,8 +84,9 @@ struct BuddyOverlayView: View {
                     BuddyCursor(color: color, phase: state.phase, level: state.audioLevel,
                                 rotation: state.rotation, scale: state.flightScale)
                         .position(local)
-                        .opacity(overNotch ? 0 : 1)
+                        .opacity(overNotch || state.resting ? 0 : 1)
                         .animation(.easeOut(duration: 0.15), value: overNotch)
+                        .animation(.easeInOut(duration: state.resting ? 0.4 : 0.15), value: state.resting)
 
                     if let callout = state.callout {
                         Text(callout)

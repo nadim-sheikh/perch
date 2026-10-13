@@ -46,6 +46,28 @@ final class BuddyState: ObservableObject {
 
     var isPointing: Bool { navigation != .following }
 
+    /// The buddy fades out like the system pointer does: after a few seconds without mouse movement,
+    /// or as soon as the user types. It comes back on the next mouse move, and never hides while busy.
+    @Published private(set) var resting = false
+    private var lastMouseMove = Date()
+    private var restTimer: Timer?
+    private var keyMonitor: Any?
+
+    private func mouseMoved() {
+        lastMouseMove = Date()
+        if resting { resting = false }
+        wakeFollow()
+    }
+
+    private var canRest: Bool {
+        phase == .idle && navigation == .following && bubbleText.isEmpty && marks.isEmpty && callout == nil
+    }
+
+    private func checkRest() {
+        if !canRest { if resting { resting = false }; return }
+        if !resting && Date().timeIntervalSince(lastMouseMove) > 3 { resting = true }
+    }
+
     private var followTimer: Timer?
     private var mouseMonitors: [Any] = []
     private var flightTimer: Timer?
@@ -60,12 +82,21 @@ final class BuddyState: ObservableObject {
         guard mouseMonitors.isEmpty else { return }
         let moves: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: moves, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.wakeFollow() }
+            MainActor.assumeIsolated { self?.mouseMoved() }
         }) { mouseMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: moves, handler: { [weak self] e in
-            MainActor.assumeIsolated { self?.wakeFollow() }
+            MainActor.assumeIsolated { self?.mouseMoved() }
             return e
         }) { mouseMonitors.append(local) }
+        // macOS hides the pointer while you type; the buddy does the same.
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.canRest == true { self?.resting = true } }
+        }
+        let rest = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkRest() }
+        }
+        RunLoop.main.add(rest, forMode: .common)
+        restTimer = rest
         wakeFollow()
     }
 

@@ -302,13 +302,24 @@ final class Companion {
         let cursorScreen = ScreenCapture.hasPermission()
             ? (try? await ScreenCapture.captureCursorScreen()) ?? nil : nil
         if Task.isCancelled { return }
-        let reply = AgentTrigger.start(job, screenshot: cursorScreen)
-        store.append(Message(role: .assistant, text: reply), to: store.activeConversationID())
+        let id = store.activeConversationID()
+        let reply = AgentTrigger.start(job, screenshot: cursorScreen, context: Self.recentContext(store.history(for: id, limit: 13)))
+        store.append(Message(role: .assistant, text: reply), to: id)
         if inNotch {
             let notch = NotchModel.shared
             notch.responseText = reply; notch.responseFinished = true; state.phase = .idle; return
         }
         await quickReply(reply)
+    }
+
+    /// The chat so far, so a helper understands "do that", "the one we talked about" and the like.
+    /// The newest user message is the task itself, so it's left out.
+    static func recentContext(_ history: [ChatTurn]) -> String? {
+        var turns = history
+        if turns.last?.role == .user { turns.removeLast() }
+        guard !turns.isEmpty else { return nil }
+        let lines = turns.map { t in "\(t.role == .user ? "User" : "Perch"): \(t.text.prefix(1_500))" }
+        return "Your conversation with the user so far (the task below may refer to it):\n" + lines.joined(separator: "\n")
     }
 
     /// Shows and speaks a short reply that didn't need the model.
@@ -423,6 +434,16 @@ enum AgentTrigger {
         return w.isEmpty ? "agent" : w
     }
 
+    /// Helper turns started from a chat with Perch, and that chat. When one finishes, its result is added
+    /// to the chat so later questions ("make it pink", "open it") know what was done.
+    static var handedOff: [UUID: UUID] = [:]
+
+    static func helperFinished(_ agent: BuddyAgent, turn: AgentTurn) {
+        guard let chat = handedOff.removeValue(forKey: turn.id), turn.state == .finished else { return }
+        let result = turn.summary ?? "done"
+        ConversationStore.shared.append(Message(role: .assistant, text: "\(agent.name) finished: \(result)"), to: chat)
+    }
+
     /// What the guide model answers with when they want it done rather than shown.
     static let doTag = "[DO]"
 
@@ -466,13 +487,15 @@ enum AgentTrigger {
     }
 
     /// Starts the helper and returns a short line to say.
-    static func start(_ job: Job, screenshot: CapturedScreen?) -> String {
+    static func start(_ job: Job, screenshot: CapturedScreen?, context: String? = nil) -> String {
         let roster = AgentRoster.shared
         let manager = AgentManager.shared
         let helper: BuddyAgent? = job.helper ?? bestHelper(for: job.task)
         guard let helper else { return "I couldn't start a helper just now." }
         manager.registerNewAgent(helper)
-        manager.launch(slug: helper.id, prompt: job.task, screenshot: screenshot)
+        if let turn = manager.launch(slug: helper.id, prompt: job.task, screenshot: screenshot, context: context) {
+            handedOff[turn] = ConversationStore.shared.activeConversationID()
+        }
         return ["On it. \(helper.name)'s taking care of that.", "Got it, \(helper.name) is on it.",
                 "Sure thing. Handing that to \(helper.name)."].randomElement()!
     }
