@@ -357,6 +357,7 @@ struct NotchRootView: View {
 
     /// Keeps Home's content alive for a moment while the shape shrinks over it.
     @State private var homeClosingUntil = Date.distantPast
+    @State private var homeContentVisible = false
     private var homeMounted: Bool { model.presentation == .home || Date() < homeClosingUntil }
 
     var body: some View {
@@ -370,9 +371,7 @@ struct NotchRootView: View {
                     if homeMounted {
                         HomeView(onClose: { model.closeHome() })
                             .frame(width: NotchModel.homeSize.width - 16, height: NotchModel.homeSize.height)
-                            .opacity(model.presentation == .home ? 1 : 0)
-                            .animation(model.presentation == .home ? .easeOut(duration: 0.28).delay(0.06) : .easeIn(duration: 0.22),
-                                       value: model.presentation == .home)
+                            .opacity(homeContentVisible ? 1 : 0)
                             .allowsHitTesting(model.presentation == .home)
                     }
 
@@ -404,8 +403,14 @@ struct NotchRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
-        .onChange(of: model.presentation) { old, _ in
-            if old == .home {
+        .onChange(of: model.presentation) { old, new in
+            if new == .home {
+                // Let the shape grow first, then fade the content in so nothing flashes mid-expand.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                    if model.presentation == .home { withAnimation(.easeOut(duration: 0.2)) { homeContentVisible = true } }
+                }
+            } else if old == .home {
+                withAnimation(.easeIn(duration: 0.15)) { homeContentVisible = false }
                 homeClosingUntil = Date().addingTimeInterval(0.55)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { homeClosingUntil = .distantPast }
             }
@@ -423,10 +428,23 @@ struct NotchRootView: View {
 
     // MARK: Compact states
 
+    /// The width to keep clear in the middle of a compact strip for the camera housing.
+    private var notchGap: CGFloat { max(model.hardwareNotchWidth, 0) + 10 }
+
+    /// Lays a strip out as: left ear | clear centre (notch) | right ear.
+    private func strip<L: View, R: View>(@ViewBuilder left: () -> L, @ViewBuilder right: () -> R) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 7) { left() }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 14)
+            Color.clear.frame(width: notchGap)
+            HStack(spacing: 7) { right() }.frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 14)
+        }
+        .frame(height: model.notchHeight)
+    }
+
     private var dockedView: some View {
-        HStack {
+        strip {
             MiniFace()
-            Spacer()
+        } right: {
             if !agents.unread.isEmpty {
                 Text("\(agents.unread.count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
                     .frame(width: 16, height: 16).background(Circle().fill(accent))
@@ -434,16 +452,16 @@ struct NotchRootView: View {
                 Circle().fill(accent).frame(width: 6, height: 6).shadow(color: accent.opacity(0.9), radius: 4)
             }
         }
-        .padding(.horizontal, 18).frame(height: model.notchHeight)
     }
 
     private var activityStrip: some View {
-        HStack(spacing: 8) {
+        strip {
             MascotView(size: 18, happy: true)
             Text(stripLabel).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                .fixedSize()
                 .contentTransition(.interpolate)
                 .animation(.easeInOut(duration: 0.25), value: stripLabel)
-            Spacer()
+        } right: {
             ZStack(alignment: .trailing) {
                 if model.presentation == .listening {
                     WaveBars(level: state.audioLevel, color: accent).transition(.opacity)
@@ -456,7 +474,6 @@ struct NotchRootView: View {
             .frame(width: 30, alignment: .trailing)
             .animation(.easeInOut(duration: 0.2), value: model.presentation)
         }
-        .padding(.horizontal, 20).frame(height: model.notchHeight)
     }
 
     private var stripLabel: String {
@@ -470,18 +487,18 @@ struct NotchRootView: View {
     private var agentStrip: some View {
         let running = roster.agents.filter { agents.running.contains($0.id) }
         let agent = running.isEmpty ? nil : running[model.agentRotation % running.count]
-        return HStack(spacing: 8) {
+        return strip {
             if let agent {
                 AgentAvatar(agent: agent, size: 18)
-                Text(running.count > 1 ? "\(running.count) helpers working" : "\(agent.name) is working")
+                Text(running.count > 1 ? "\(running.count) helpers working" : "\(agent.name)…")
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                    .fixedSize()
                     .id(agent.id)
                     .transition(.push(from: .bottom))
-                Spacer()
-                ThinkingDots(color: agent.tint)
             }
+        } right: {
+            if let agent { ThinkingDots(color: agent.tint) }
         }
-        .padding(.horizontal, 20).frame(height: model.notchHeight)
     }
 
     // MARK: Peek

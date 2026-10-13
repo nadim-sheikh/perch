@@ -165,13 +165,25 @@ struct BuddyCursor: View {
     }
 }
 
+/// A soft, rounded pointer: a friendly teardrop that points up-left, with
+/// gently curved sides and rounded corners instead of sharp spikes.
 struct CursorShape: Shape {
     func path(in r: CGRect) -> Path {
+        let w = r.width, h = r.height
+        let tip = CGPoint(x: r.minX + w * 0.08, y: r.minY + h * 0.08)
+        let right = CGPoint(x: r.minX + w * 0.92, y: r.minY + h * 0.52)
+        let notch = CGPoint(x: r.minX + w * 0.5, y: r.minY + h * 0.6)
+        let bottom = CGPoint(x: r.minX + w * 0.4, y: r.maxY - h * 0.06)
         var p = Path()
-        p.move(to: CGPoint(x: r.minX, y: r.minY))
-        p.addLine(to: CGPoint(x: r.maxX, y: r.midY + r.height * 0.15))
-        p.addLine(to: CGPoint(x: r.midX, y: r.midY + r.height * 0.2))
-        p.addLine(to: CGPoint(x: r.minX + r.width * 0.25, y: r.maxY))
+        p.move(to: tip)
+        // top edge bows out slightly toward the right shoulder
+        p.addQuadCurve(to: right, control: CGPoint(x: r.minX + w * 0.72, y: r.minY + h * 0.14))
+        // inner curve into the tail notch
+        p.addQuadCurve(to: notch, control: CGPoint(x: r.minX + w * 0.66, y: r.minY + h * 0.64))
+        // tail
+        p.addQuadCurve(to: bottom, control: CGPoint(x: r.minX + w * 0.52, y: r.maxY - h * 0.1))
+        // back edge up to the tip
+        p.addQuadCurve(to: tip, control: CGPoint(x: r.minX + w * 0.1, y: r.minY + h * 0.42))
         p.closeSubpath()
         return p
     }

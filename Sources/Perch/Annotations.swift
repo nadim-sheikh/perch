@@ -60,6 +60,11 @@ enum MarkTags {
     /// Removes every control tag, and hides a half-streamed one at the end.
     static func stripAll(_ text: String) -> String {
         var out = anyTag.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        // Turn dash-as-punctuation into a comma pause; leave hyphenated words alone.
+        out = out.replacingOccurrences(of: " — ", with: ", ")
+                 .replacingOccurrences(of: " – ", with: ", ")
+                 .replacingOccurrences(of: " - ", with: ", ")
+                 .replacingOccurrences(of: "—", with: ", ")
         if let open = out.range(of: "[", options: .backwards), !out[open.lowerBound...].contains("]") {
             out = String(out[..<open.lowerBound])
         }
