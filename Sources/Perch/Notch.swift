@@ -108,6 +108,7 @@ final class NotchController {
     private let panelSize = CGSize(width: 920, height: 640)
     private var homeMouseLeftAt: Date?
     private var inputMonitor: Any?
+    private var voiceHeldUntil = Date.distantPast
 
     func show() {
         let view = NotchRootView()
@@ -278,11 +279,13 @@ final class NotchController {
         if model.responseVisible { return .textResponse }
         if IntegrationSuggestions.shared.current != nil && BuddyState.shared.phase == .idle { return .suggestion }
         switch BuddyState.shared.phase {
-        case .listening: return .listening
-        case .thinking: return .thinking
-        case .responding: return wantsPeek ? .peek : .speaking
+        case .listening: voiceHeldUntil = Date().addingTimeInterval(0.6); return .listening
+        case .thinking: voiceHeldUntil = Date().addingTimeInterval(0.6); return .thinking
+        case .responding: voiceHeldUntil = Date().addingTimeInterval(0.6); return .speaking
         default: break
         }
+        // Hold the strip briefly so it doesn't flicker between one turn and the next.
+        if Date() < voiceHeldUntil, [.listening, .thinking, .speaking].contains(model.presentation) { return model.presentation }
         if wantsPeek { return .peek }
         if !AgentManager.shared.running.isEmpty { return .agents }
         return .docked
@@ -383,13 +386,22 @@ struct NotchRootView: View {
                     insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
                         .animation(.easeOut(duration: 0.22).delay(model.presentation == .home ? 0.2 : 0.08)),
                     removal: .opacity.animation(.easeIn(duration: 0.1))))
-                .id(model.presentation)
+                .id(contentKey)
             }
             .frame(width: size.width, height: size.height)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
+    }
+
+    /// Listening, thinking and speaking share one strip, so switching between
+    /// them crossfades the inside instead of rebuilding the whole notch.
+    private var contentKey: String {
+        switch model.presentation {
+        case .listening, .thinking, .speaking: return "voice"
+        default: return "\(model.presentation)"
+        }
     }
 
     // MARK: Compact states
@@ -412,22 +424,29 @@ struct NotchRootView: View {
         HStack(spacing: 8) {
             MascotView(size: 18, happy: true)
             Text(stripLabel).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
-                .contentTransition(.opacity)
+                .contentTransition(.interpolate)
+                .animation(.easeInOut(duration: 0.25), value: stripLabel)
             Spacer()
-            switch model.presentation {
-            case .listening: WaveBars(level: state.audioLevel, color: accent)
-            case .thinking: ThinkingDots(color: accent)
-            default: EqualizerBars(color: accent)
+            ZStack(alignment: .trailing) {
+                if model.presentation == .listening {
+                    WaveBars(level: state.audioLevel, color: accent).transition(.opacity)
+                } else if model.presentation == .thinking {
+                    ThinkingDots(color: accent).transition(.opacity)
+                } else {
+                    EqualizerBars(color: accent).transition(.opacity)
+                }
             }
+            .frame(width: 30, alignment: .trailing)
+            .animation(.easeInOut(duration: 0.2), value: model.presentation)
         }
         .padding(.horizontal, 20).frame(height: model.notchHeight)
     }
 
     private var stripLabel: String {
         switch model.presentation {
-        case .listening: return "Listening"
-        case .thinking: return "Thinking"
-        default: return "Speaking"
+        case .listening: return "Listening…"
+        case .thinking: return "Hmm, thinking…"
+        default: return "Talking"
         }
     }
 

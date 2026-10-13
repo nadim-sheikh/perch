@@ -25,10 +25,10 @@ actor Kokoro {
         try await t.value
     }
 
-    func synthesize(_ text: String, voice: String) async throws -> Data {
+    func synthesize(_ text: String, voice: String, speed: Float) async throws -> Data {
         try await prepare()
         guard let manager else { throw CancellationError() }
-        return try await manager.synthesize(text: text, voice: voice)
+        return try await manager.synthesize(text: text, voice: voice, speed: speed)
     }
 }
 
@@ -81,15 +81,16 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     /// Speaks sentence by sentence: the next one renders while the current one plays.
     private func speakKokoro(_ text: String, voice: String) async -> Bool {
-        let sentences = Self.sentences(text)
+        let sentences = Self.sentences(Self.speakable(text))
         guard !sentences.isEmpty else { return true }
         generation += 1
         let gen = generation
-        var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice) }
+        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.94)
+        var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice, speed: speed) }
         for i in sentences.indices {
             guard let data = await next?.value, gen == generation else { return i > 0 }
             next = i + 1 < sentences.count
-                ? Task { [s = sentences[i + 1]] in try? await Kokoro.shared.synthesize(s, voice: voice) } : nil
+                ? Task { [s = sentences[i + 1]] in try? await Kokoro.shared.synthesize(s, voice: voice, speed: speed) } : nil
             guard let player = try? AVAudioPlayer(data: data) else { return false }
             self.player = player
             player.delegate = self
@@ -98,8 +99,28 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                 player.play()
             }
             if gen != generation { return true }
+            // A natural breath between sentences: a touch longer after questions and exclamations.
+            if i + 1 < sentences.count {
+                let end = sentences[i].last
+                let pause: UInt64 = end == "?" || end == "!" ? 420 : end == "," ? 180 : 320
+                try? await Task.sleep(nanoseconds: pause * 1_000_000)
+                if gen != generation { return true }
+            }
         }
         return true
+    }
+
+    /// Cleans text so it sounds natural when read aloud.
+    static func speakable(_ text: String) -> String {
+        var t = text
+        let swaps: [(String, String)] = [
+            ("—", ", "), ("–", ", "), (" - ", ", "), ("…", "..."), ("&", " and "), ("e.g.", "for example"),
+            ("i.e.", "that is"), ("etc.", "and so on"), ("**", ""), ("__", ""), ("`", ""), ("#", ""), ("•", ""),
+        ]
+        for (a, b) in swaps { t = t.replacingOccurrences(of: a, with: b) }
+        // Drop emoji and other symbols the voice would stumble on.
+        t = String(t.unicodeScalars.filter { !($0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x2000)) }.map(Character.init))
+        return t.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var generation = 0
@@ -109,10 +130,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { s, _, _, _ in
             if let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { out.append(s) }
         }
-        // Merge very short bits so the voice doesn't sound choppy.
+        // Merge tiny fragments ("Oh!") into the next sentence so they don't sound clipped.
         var merged: [String] = []
         for s in out {
-            if let last = merged.last, last.count < 40 { merged[merged.count - 1] = last + " " + s } else { merged.append(s) }
+            if let last = merged.last, last.count < 12 { merged[merged.count - 1] = last + " " + s } else { merged.append(s) }
         }
         return merged
     }

@@ -289,6 +289,7 @@ private struct AIPage: View {
 private struct VoicePage: View {
     @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
+    @AppStorage("voiceSpeed") private var voiceSpeed = 0.94
     @State private var previewing = false
     @AppStorage("openaiVoice") private var openaiVoice = "alloy"
     @AppStorage("systemVoiceID") private var systemVoiceID = ""
@@ -307,6 +308,9 @@ private struct VoicePage: View {
         }
         if voiceEngine == VoiceEngine.kokoro.rawValue {
             SettingsGroup(title: "Natural voice") {
+                SettingsRow(title: "Pace") {
+                    Slider(value: $voiceSpeed, in: 0.8...1.15).frame(width: 160)
+                }
                 SettingsRow(title: "Voice", subtitle: "Runs privately on your Mac. First use downloads ~330 MB.", last: true) {
                     HStack(spacing: 6) {
                         Picker("", selection: $kokoroVoice) {

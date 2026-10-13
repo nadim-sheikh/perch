@@ -188,7 +188,6 @@ struct SpeechBubble: View {
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(color.opacity(0.55), lineWidth: 1))
             )
             .shadow(color: .black.opacity(0.25), radius: 12)
-            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: text.count / 12)
     }
 }
 
