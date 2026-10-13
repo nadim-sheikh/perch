@@ -88,7 +88,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         guard !sentences.isEmpty else { return true }
         generation += 1
         let gen = generation
-        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.97)
+        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1.0)
         var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice, speed: speed) }
         for i in sentences.indices {
             guard let data = await next?.value, gen == generation else { return i > 0 }
@@ -102,11 +102,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                 player.play()
             }
             if gen != generation { return true }
-            // A natural breath between sentences: a touch longer after questions and exclamations.
             if i + 1 < sentences.count {
-                let end = sentences[i].last
-                let pause: UInt64 = end == "?" || end == "!" ? 420 : end == "," ? 180 : 320
-                try? await Task.sleep(nanoseconds: pause * 1_000_000)
+                try? await Task.sleep(nanoseconds: 140_000_000)
                 if gen != generation { return true }
             }
         }
@@ -141,7 +138,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         liveFinished = false
         let gen = generation
         let voice = AppSettings.shared.kokoroVoice
-        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 0.97)
+        let speed = Float(UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1.0)
         liveTask = Task { [weak self] in
             var prefetched: (String, Task<Data?, Never>)?
             while let self, gen == self.generation {
@@ -168,16 +165,16 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                     player.play()
                 }
                 guard gen == self.generation else { break }
-                let end = current.0.last
-                let pause: UInt64 = end == "?" || end == "!" ? 300 : end == "." ? 220 : 90
-                try? await Task.sleep(nanoseconds: pause * 1_000_000)
+                try? await Task.sleep(nanoseconds: 140_000_000)
             }
         }
     }
 
     func enqueueLive(_ text: String) {
         guard AppSettings.shared.voiceEngine == .kokoro else { return }
-        liveQueue.append(contentsOf: Self.phrases(Self.speakable(text)))
+        // Each flush is already a smooth-sized chunk of whole sentences.
+        let clean = Self.speakable(text)
+        if !clean.isEmpty { liveQueue.append(clean) }
     }
 
     /// Waits until everything queued has been spoken.
@@ -187,23 +184,21 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         liveTask = nil
     }
 
-    /// Splits text into short phrases: sentences, and long sentences at commas.
-    /// Short phrases keep the voice clear (no slurred words) and start sooner.
-    static func phrases(_ text: String) -> [String] {
+    /// Groups whole sentences into chunks of roughly 16+ words. The voice model renders
+    /// longer clips with its higher-quality path (short clips sound slurred), and whole
+    /// sentences keep natural intonation.
+    static func phrases(_ text: String, minWords: Int = 16) -> [String] {
         var out: [String] = []
+        var current = ""
         for sentence in sentences(text) {
-            let words = sentence.split(separator: " ")
-            if words.count <= 14 { out.append(sentence); continue }
-            var current = ""
-            for part in sentence.split(separator: ",", omittingEmptySubsequences: false) {
-                let piece = part.trimmingCharacters(in: .whitespaces)
-                if piece.isEmpty { continue }
-                if current.isEmpty { current = piece } else if current.split(separator: " ").count < 6 { current += ", " + piece } else {
-                    out.append(current + ",")
-                    current = piece
-                }
+            current = current.isEmpty ? sentence : current + " " + sentence
+            if current.split(separator: " ").count >= minWords {
+                out.append(current)
+                current = ""
             }
-            if !current.isEmpty { out.append(current) }
+        }
+        if !current.isEmpty {
+            if let last = out.last, current.split(separator: " ").count < 6 { out[out.count - 1] = last + " " + current } else { out.append(current) }
         }
         return out
     }
@@ -213,12 +208,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { s, _, _, _ in
             if let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { out.append(s) }
         }
-        // Merge tiny fragments ("Oh!") into the next sentence so they don't sound clipped.
-        var merged: [String] = []
-        for s in out {
-            if let last = merged.last, last.count < 12 { merged[merged.count - 1] = last + " " + s } else { merged.append(s) }
-        }
-        return merged
+        return out
     }
 
     static func warmUp() {

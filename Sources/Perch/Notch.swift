@@ -355,16 +355,13 @@ struct NotchRootView: View {
             .prefix(3).map { $0 }
     }
 
-    @State private var homeMounted = false
-    @State private var homeOpacity: Double = 0
+    /// Keeps Home's content alive for a moment while the shape shrinks over it.
+    @State private var homeClosingUntil = Date.distantPast
+    private var homeMounted: Bool { model.presentation == .home || Date() < homeClosingUntil }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
-                if model.presentation == .listening {
-                    CornerGlow(color: accent).frame(width: size.width + 60, height: size.height + 40).id("glow")
-                }
-
                 // One surface: the same black shape is the notch, the strips, the cards and Home.
                 ZStack(alignment: .top) {
                     Color.black
@@ -373,7 +370,9 @@ struct NotchRootView: View {
                     if homeMounted {
                         HomeView(onClose: { model.closeHome() })
                             .frame(width: NotchModel.homeSize.width - 16, height: NotchModel.homeSize.height)
-                            .opacity(homeOpacity)
+                            .opacity(model.presentation == .home ? 1 : 0)
+                            .animation(model.presentation == .home ? .easeOut(duration: 0.28).delay(0.06) : .easeIn(duration: 0.22),
+                                       value: model.presentation == .home)
                             .allowsHitTesting(model.presentation == .home)
                     }
 
@@ -405,16 +404,10 @@ struct NotchRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
-        .onChange(of: model.presentation) { old, new in
-            if new == .home {
-                homeMounted = true
-                withAnimation(.easeOut(duration: 0.28).delay(0.06)) { homeOpacity = 1 }
-            } else if old == .home {
-                // Fade the content as the shape shrinks over it, then unmount.
-                withAnimation(.easeIn(duration: 0.22)) { homeOpacity = 0 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                    if model.presentation != .home { homeMounted = false }
-                }
+        .onChange(of: model.presentation) { old, _ in
+            if old == .home {
+                homeClosingUntil = Date().addingTimeInterval(0.55)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { homeClosingUntil = .distantPast }
             }
         }
     }

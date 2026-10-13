@@ -15,7 +15,7 @@ final class OverlayPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         ignoresMouseEvents = true
-        level = .screenSaver
+        level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         setFrame(screen.frame, display: true)
@@ -77,10 +77,13 @@ struct BuddyOverlayView: View {
         GeometryReader { _ in
             if screenFrame.insetBy(dx: -40, dy: -40).contains(state.position) {
                 let local = CGPoint(x: state.position.x - screenFrame.minX, y: screenFrame.maxY - state.position.y)
+                let overNotch = local.y < 44 && abs(local.x - screenFrame.width / 2) < 280 && state.navigation == .following
                 ZStack(alignment: .topLeading) {
                     BuddyCursor(color: color, phase: state.phase, level: state.audioLevel,
                                 rotation: state.rotation, scale: state.flightScale)
                         .position(local)
+                        .opacity(overNotch ? 0 : 1)
+                        .animation(.easeOut(duration: 0.15), value: overNotch)
 
                     if let callout = state.callout {
                         Text(callout)
@@ -108,11 +111,13 @@ struct BuddyOverlayView: View {
         .ignoresSafeArea()
     }
 
-    /// Place the bubble right-below the buddy, flipping near the edges.
+    /// Place the bubble right-below the buddy, flipping near the edges and never
+    /// tucking under the notch / menu bar.
     private func bubbleOffset(for p: CGPoint) -> CGSize {
         let width: CGFloat = 300
         let x = p.x + width + 40 > screenFrame.width ? p.x - width - 18 : p.x + 18
-        let y = min(max(p.y + 14, 8), screenFrame.height - 200)
+        let topClearance: CGFloat = 70   // below the notch strip
+        let y = min(max(p.y + 14, topClearance), screenFrame.height - 200)
         return CGSize(width: x, height: y)
     }
 }

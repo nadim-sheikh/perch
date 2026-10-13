@@ -123,11 +123,10 @@ final class Companion {
             let pending = String(visible.dropFirst(spokenUpTo))
             var cut = pending.endIndex
             if !final {
-                // Only speak up to the last finished sentence (or a comma after a long run).
-                guard let r = pending.range(of: #"[.!?](\s)"#, options: [.regularExpression, .backwards]) else {
-                    if pending.split(separator: " ").count > 16, let c = pending.range(of: ", ", options: .backwards) { cut = c.upperBound } else { return }
-                    let piece = String(pending[..<cut]); spokenUpTo += piece.count; speaker.enqueueLive(piece); return
-                }
+                // Speak whole sentences, in chunks big enough to sound smooth (the first one a little sooner).
+                guard let r = pending.range(of: #"[.!?](\s)"#, options: [.regularExpression, .backwards]) else { return }
+                let words = pending[..<r.upperBound].split(separator: " ").count
+                if words < (spokenUpTo == 0 ? 10 : 16) { return }
                 cut = r.upperBound
             }
             let piece = String(pending[..<cut])

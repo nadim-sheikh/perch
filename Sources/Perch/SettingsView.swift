@@ -296,7 +296,7 @@ private struct AIPage: View {
 private struct VoicePage: View {
     @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.kokoro.rawValue
     @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
-    @AppStorage("voiceSpeed") private var voiceSpeed = 0.97
+    @AppStorage("voiceSpeed") private var voiceSpeed = 1.0
     @State private var previewing = false
     @AppStorage("openaiVoice") private var openaiVoice = "alloy"
     @AppStorage("systemVoiceID") private var systemVoiceID = ""
