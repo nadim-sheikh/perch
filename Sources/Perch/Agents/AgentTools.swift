@@ -624,6 +624,15 @@ final class AgentToolbox {
         return ToolOutput(text: "Front app: \(front)\n\(desc)", images: screens.map(\.jpegBase64))
     }
 
+    /// After a batch of on-screen actions, what the screen holds now, so the model can carry on without
+    /// spending a step on list_ui_elements. Element ids are refreshed here, after the whole batch has run.
+    func screenAfterActions(_ names: [String]) async -> String? {
+        guard names.contains(where: Self.changesScreen.contains), AXIsProcessTrusted() else { return nil }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let listing = listElements()
+        return listing.isError ? nil : "Screen now (use these ids with click_element):\n" + listing.text
+    }
+
     private func listElements() -> ToolOutput {
         guard AXIsProcessTrusted() else {
             return .error("Perch doesn't have Accessibility permission. Ask the user to allow it in System Settings → Privacy & Security, or use take_screenshot and click.")

@@ -132,6 +132,10 @@ final class AgentRun {
                 onEvent(.toolFinished(id: call.id, isError: output.isError))
                 outputs.append(output)
             }
+            if let last = outputs.indices.last, !outputs[last].isError,
+               let screen = await toolbox.screenAfterActions(calls.map(\.name)) {
+                outputs[last].text += "\n\n" + screen
+            }
             return outputs
         }
         for (call, input) in zip(calls, inputs) { onEvent(.toolStarted(id: call.id, name: call.name, input: input)) }

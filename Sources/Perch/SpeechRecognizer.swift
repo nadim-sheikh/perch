@@ -15,7 +15,9 @@ enum CloudTranscriber {
     /// Returns nil on any failure so the caller can fall back to on-device speech.
     static func transcribe(_ samples: [Float]) async -> String? {
         let key = await AppSettings.shared.openrouterKey
+        let samples = trimSilence(samples)
         guard !key.isEmpty, samples.count > 8_000 else { return nil }
+        let started = Date()
         var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/audio/transcriptions")!, timeoutInterval: 15)
         req.httpMethod = "POST"
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -35,11 +37,27 @@ enum CloudTranscriber {
                 DebugLog.write("scribe: HTTP \(status) \(String(data: data.prefix(200), encoding: .utf8) ?? "")")
                 return nil
             }
+            DebugLog.write(String(format: "scribe: %.1fs of speech, text back in %.2fs",
+                                  Double(samples.count) / 16_000, Date().timeIntervalSince(started)))
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             DebugLog.write("scribe: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// Drops the quiet before and after speaking (keeping a short pad): less to upload and transcribe.
+    private static func trimSilence(_ samples: [Float]) -> [Float] {
+        let frame = 320, pad = 4_000  // 20 ms frames, 0.25 s pad at 16 kHz
+        let loud: (Int) -> Bool = { start in
+            let end = min(start + frame, samples.count)
+            var sum: Float = 0
+            for i in start..<end { sum += samples[i] * samples[i] }
+            return sqrt(sum / Float(max(1, end - start))) > 0.006
+        }
+        let frames = stride(from: 0, to: samples.count, by: frame)
+        guard let first = frames.first(where: loud), let last = frames.reversed().first(where: loud) else { return samples }
+        return Array(samples[max(0, first - pad)..<min(samples.count, last + frame + pad)])
     }
 
     /// 16 kHz mono 16-bit PCM WAV.
@@ -152,6 +170,7 @@ final class SpeechRecognizer {
         let parakeetReady = await Parakeet.shared.isReady
         usingScribe = Self.preferredEngine == .scribe && AppSettings.shared.hasKey
         usingParakeet = usingScribe || (Self.preferredEngine == .parakeet && parakeetReady)
+        if usingScribe { Warmup.connection() }  // the upload then reuses an open connection
         guard gen == generation else { throw CancellationError() }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)

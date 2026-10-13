@@ -142,15 +142,8 @@ final class Companion {
             return
         }
         if let job = AgentTrigger.match(question) {
-            let cursorScreen = ScreenCapture.hasPermission()
-                ? (try? await ScreenCapture.captureCursorScreen()) ?? nil : nil
-            if Task.isCancelled { return }
-            let id = store.activeConversationID()
-            store.append(Message(role: .user, text: question), to: id)
-            let reply = AgentTrigger.start(job, screenshot: cursorScreen)
-            store.append(Message(role: .assistant, text: reply), to: id)
-            if inNotch { notch.responseText = reply; notch.responseFinished = true; state.phase = .idle; return }
-            await quickReply(reply)
+            store.append(Message(role: .user, text: question), to: store.activeConversationID())
+            await handOff(job, inNotch: inNotch)
             return
         }
         let conversationID = store.activeConversationID()
@@ -231,6 +224,15 @@ final class Companion {
                 if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
                 if full.isEmpty { perchLog.notice("ask: first chunk") }
                 full += chunk
+                // The model decided they want it done, not shown: hand the job to a helper.
+                let head = full.trimmingCharacters(in: .whitespacesAndNewlines)
+                if head.hasPrefix(AgentTrigger.doTag) {
+                    speaker.stop()
+                    store.streamingText = nil
+                    await handOff(AgentTrigger.Job(task: question, helper: nil), inNotch: inNotch)
+                    return
+                }
+                if AgentTrigger.doTag.hasPrefix(head) { continue }
                 state.phase = .responding
                 if Date().timeIntervalSince(lastRefresh) >= 0.05 { refresh() }
             }
@@ -292,6 +294,21 @@ final class Companion {
         // Linger just long enough to finish reading, then fade.
         let words = Double(visible.split(separator: " ").count)
         scheduleBubbleHide(after: AppSettings.shared.voiceEngine == .off ? min(max(2.5 + words * 0.25, 4), 14) : 2.5)
+    }
+
+    /// Starts a helper on the job (with a look at the screen) and says who took it.
+    /// The user's message is already saved.
+    private func handOff(_ job: AgentTrigger.Job, inNotch: Bool) async {
+        let cursorScreen = ScreenCapture.hasPermission()
+            ? (try? await ScreenCapture.captureCursorScreen()) ?? nil : nil
+        if Task.isCancelled { return }
+        let reply = AgentTrigger.start(job, screenshot: cursorScreen)
+        store.append(Message(role: .assistant, text: reply), to: store.activeConversationID())
+        if inNotch {
+            let notch = NotchModel.shared
+            notch.responseText = reply; notch.responseFinished = true; state.phase = .idle; return
+        }
+        await quickReply(reply)
     }
 
     /// Shows and speaks a short reply that didn't need the model.
@@ -406,8 +423,30 @@ enum AgentTrigger {
         return w.isEmpty ? "agent" : w
     }
 
-    /// Matches "agent, build me a site", "hey agent …", "Agent Shippy …".
+    /// What the guide model answers with when they want it done rather than shown.
+    static let doTag = "[DO]"
+
+    /// A job for a helper: the trigger word, or a request that is plainly "do this for me".
     static func match(_ text: String) -> Job? {
+        if let job = matchWord(text) { return job }
+        return wantsItDone(text) ? Job(task: text, helper: nil) : nil
+    }
+
+    /// "Help me…", "how do I…", "show me where…" want guiding; "make…", "send…", "can you write…",
+    /// "…for me" want doing. Anything unclear stays in guide mode, where the model can still answer [DO].
+    static func wantsItDone(_ text: String) -> Bool {
+        let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        let guide = #"^(hey |ok |okay |so |um |uh )*(please )?((can|could|would|will) you )?(help|show|teach|guide|walk|explain|tell me (how|where|what|why)|how|where|what|why|which|when|who|is |are |does |do i|should|i want to learn|i don'?t know how)\b"#
+        if t.range(of: guide, options: .regularExpression) != nil { return false }
+        if t.contains("help me") || t.contains("how to") || t.contains("show me") { return false }
+        if t.range(of: #"\b(for me|do it|go ahead|on my behalf|you do)\b"#, options: .regularExpression) != nil { return true }
+        let verbs = "open|create|make|build|write|draft|send|post|reply|set up|setup|organi[sz]e|rename|move|download|install|research|look up|search|book|schedule|add|put|generate|summari[sz]e|fix|clean up|edit|change|turn|play|close|start|run|type|fill|save|copy|convert|export|upload|order|plan|translate|delete|remove"
+        let doIt = "^(hey |ok |okay |so |um |uh )*(please )?((can|could|would|will) you (please )?)?(go |just )?(\(verbs))\\b"
+        return t.range(of: doIt, options: .regularExpression) != nil
+    }
+
+    /// Matches "agent, build me a site", "hey agent …", "Agent Shippy …".
+    private static func matchWord(_ text: String) -> Job? {
         let lower = text.lowercased()
         let w = word.lowercased()
         let pattern = "^\\W*(hey\\s+|ok\\s+|okay\\s+)?" + NSRegularExpression.escapedPattern(for: w) + "\\b[\\s,.:!-]*"
@@ -468,10 +507,11 @@ enum AgentTrigger {
         """
 
 
-        GUIDE MODE. Right now you only show and explain; you never do things for them. When they want to do \
-        something, tell them the next step in a sentence or two and mark exactly where on the screen with POINT \
-        and a HIGHLIGHT (or CIRCLE/ARROW). For longer tasks give just the next step and say you'll guide them on. \
-        If they ask you to actually do it for them, tell them to start with the word "\(word)" and a helper will handle it.
+        GUIDE MODE. You show and explain; you don't act yourself. When they ask for help doing something, tell \
+        them the next step in a sentence or two and mark exactly where on the screen with POINT and a HIGHLIGHT \
+        (or CIRCLE/ARROW). For longer tasks give just the next step and say you'll guide them on.
+        If instead they clearly want it done for them (a command like "make…", "send…", "do it"), reply with \
+        exactly \(doTag) and nothing else: a helper agent will take over and do it.
         """
     }
 }
