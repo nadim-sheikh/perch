@@ -103,6 +103,8 @@ struct MascotView: View {
     var tint: Color = Color(red: 0.62, green: 0.80, blue: 0.98)
     var size: CGFloat = 70
     var happy = true
+    /// Gentle floating motion; only for big hero mascots (it costs a redraw every frame).
+    var animated = false
     @State private var bob = false
 
     var body: some View {
@@ -128,8 +130,8 @@ struct MascotView: View {
                 .frame(width: size * 0.14, height: size * 0.06)
                 .offset(y: size * 0.12)
         }
-        .offset(y: bob ? -2 : 2)
-        .onAppear { withAnimation(.easeInOut(duration: 1.8).repeatForever()) { bob = true } }
+        .offset(y: animated ? (bob ? -2 : 2) : 0)
+        .onAppear { if animated { withAnimation(.easeInOut(duration: 1.8).repeatForever()) { bob = true } } }
     }
 
     private struct Eye: View {

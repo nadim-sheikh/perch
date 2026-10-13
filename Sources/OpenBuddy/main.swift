@@ -17,15 +17,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BuddyState.shared.startFollowingCursor()
 
         NotchModel.shared.openHome = { [weak self] id in
-            if let id { ConversationStore.shared.selectedID = id }
-            HomeRouter.shared.settings = nil
+            if let id { HomeRouter.shared.openChat(id) } else { HomeRouter.shared.settings = nil }
             self?.showHome()
         }
         NotchModel.shared.openSettings = { [weak self] in self?.openSettings() }
+        NotchModel.shared.openAgent = { [weak self] slug in
+            HomeRouter.shared.openAgent(slug)
+            self?.showHome()
+        }
         notch.show()
 
         hotkey.onPress = { [weak self] in self?.companion.beginListening() }
         hotkey.onRelease = { [weak self] in self?.companion.endListening() }
+        hotkey.onDoubleTapControl = { NotchModel.shared.openTextInput() }
         hotkey.start()
         AppAppearance.apply()
 

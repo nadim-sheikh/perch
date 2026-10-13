@@ -170,8 +170,8 @@ struct SettingsPage: View {
         case .shortcuts: ShortcutsPage()
         case .cursor: CursorPage()
         case .permissions: PermissionsPage()
-        case .agents: ComingSoon(text: "Named background agents that run tasks with Codex or Claude Code are on the roadmap (Phase 4).")
-        case .integrations: ComingSoon(text: "Free MCP connectors for Gmail, Notion, Linear, GitHub and more are on the roadmap (Phase 5).")
+        case .agents: AgentsSettingsPage()
+        case .integrations: IntegrationsSettingsPage()
         }
     }
 }

@@ -1,0 +1,191 @@
+import Foundation
+import SwiftUI
+
+/// Where agents, skills and connectors live: a visible folder in the user's home.
+enum AgentPaths {
+    static let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("OpenBuddy", isDirectory: true)
+    static let agents = root.appendingPathComponent("Agents", isDirectory: true)
+    static let memory = root.appendingPathComponent("Memory", isDirectory: true)
+}
+
+enum AgentAccessLevel: String, Codable, CaseIterable, Identifiable {
+    case askFirst, fullAccess
+    var id: String { rawValue }
+    var title: String { self == .askFirst ? "Safe (recommended)" : "Full access" }
+    var detail: String {
+        self == .askFirst
+            ? "Can edit files in its folder, browse the web and run common dev tools. Riskier commands are blocked."
+            : "Can run any command on your Mac without asking. Only use for helpers you trust."
+    }
+}
+
+/// A named, persistent background helper with its own folder and memory.
+struct BuddyAgent: Codable, Identifiable, Hashable {
+    var id: String              // slug, e.g. "shippy"
+    var name: String
+    var role: String
+    var oneLiner: String
+    var hue: Double
+    var suggestedAsks: [String] = []
+    var sessionID: String?
+    var model: String?
+    var accessLevel: AgentAccessLevel = .askFirst
+    var createdAt = Date()
+    var archived = false
+
+    var folder: URL { AgentPaths.agents.appendingPathComponent(id, isDirectory: true) }
+    var outputFolder: URL { folder.appendingPathComponent("output", isDirectory: true) }
+    var tmpFolder: URL { folder.appendingPathComponent("tmp", isDirectory: true) }
+    var metaFolder: URL { folder.appendingPathComponent(".openbuddy", isDirectory: true) }
+    var tint: Color { Color(hue: hue, saturation: 0.45, brightness: 0.95) }
+    var backdrop: Color { Color(hue: hue, saturation: 0.18, brightness: 1.0) }
+}
+
+/// One step the agent took (a tool call), shown as a friendly row.
+struct AgentStep: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable { case edit, command, web, read, search, plan, app, helper, other }
+    var id: String
+    var kind: Kind
+    var present: String     // "Editing index.html"
+    var past: String        // "Edited index.html"
+    var detail: String?     // command text, URL, etc.
+    var done = false
+    var isError = false
+}
+
+enum AgentTurnState: String, Codable { case working, finished, failed, stopped }
+
+/// One request to an agent and everything that happened while doing it.
+struct AgentTurn: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var prompt: String
+    var startedAt = Date()
+    var finishedAt: Date?
+    var state: AgentTurnState = .working
+    var steps: [AgentStep] = []
+    var progress: [String] = []
+    var liveText = ""
+    var reply = ""
+    var summary: String?
+    var title: String?
+    var nextActions: [String] = []
+    var artifacts: [String] = []
+    var error: String?
+    var costUSD: Double?
+
+    var duration: TimeInterval { (finishedAt ?? Date()).timeIntervalSince(startedAt) }
+}
+
+/// The roster of agents, persisted per agent in `.openbuddy/agent.json`.
+@MainActor
+final class AgentRoster: ObservableObject {
+    static let shared = AgentRoster()
+    @Published private(set) var agents: [BuddyAgent] = []
+
+    init() {
+        load()
+        if agents.isEmpty {
+            for a in Self.starterCast { _ = try? found(a) }
+        }
+    }
+
+    static let starterCast: [BuddyAgent] = [
+        BuddyAgent(id: "shippy", name: "Shippy", role: "Web builder",
+                   oneLiner: "Builds websites, landing pages and small web apps, then opens them for you.",
+                   hue: 0.72, suggestedAsks: ["Make me a portfolio site", "Build a landing page for my product"]),
+        BuddyAgent(id: "research-buddy", name: "Research Buddy", role: "Researcher",
+                   oneLiner: "Digs into any topic on the web and writes a clear, sourced report.",
+                   hue: 0.07, suggestedAsks: ["Research the best mics under $200", "Summarise today's AI news"]),
+    ]
+
+    func agent(_ slug: String) -> BuddyAgent? { agents.first { $0.id == slug } }
+
+    /// Creates the agent's folder, notes and metadata.
+    @discardableResult
+    func found(_ agent: BuddyAgent) throws -> BuddyAgent {
+        let fm = FileManager.default
+        for dir in [agent.folder, agent.outputFolder, agent.tmpFolder, agent.metaFolder] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let notes = agent.folder.appendingPathComponent("AGENTS.md")
+        if !fm.fileExists(atPath: notes.path) {
+            try Self.notesTemplate(agent).write(to: notes, atomically: true, encoding: .utf8)
+        }
+        let claudeMD = agent.folder.appendingPathComponent("CLAUDE.md")
+        if !fm.fileExists(atPath: claudeMD.path) {
+            try "@AGENTS.md\n".write(to: claudeMD, atomically: true, encoding: .utf8)
+        }
+        save(agent)
+        if let i = agents.firstIndex(where: { $0.id == agent.id }) { agents[i] = agent } else { agents.append(agent) }
+        return agent
+    }
+
+    func create(name: String, role: String, oneLiner: String) throws -> BuddyAgent {
+        var slug = name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }.reduce("") { $0 + String($1) }
+        slug = slug.split(separator: "-").joined(separator: "-")
+        if slug.isEmpty { slug = "helper" }
+        var unique = slug, n = 2
+        while agent(unique) != nil { unique = "\(slug)-\(n)"; n += 1 }
+        let hue = Double(abs(unique.hashValue % 1000)) / 1000
+        return try found(BuddyAgent(id: unique, name: name, role: role, oneLiner: oneLiner, hue: hue))
+    }
+
+    func update(_ agent: BuddyAgent) {
+        save(agent)
+        if let i = agents.firstIndex(where: { $0.id == agent.id }) { agents[i] = agent }
+    }
+
+    func setArchived(_ slug: String, _ archived: Bool) {
+        guard var a = agent(slug) else { return }
+        a.archived = archived
+        update(a)
+    }
+
+    private func save(_ agent: BuddyAgent) {
+        let url = agent.metaFolder.appendingPathComponent("agent.json")
+        try? FileManager.default.createDirectory(at: agent.metaFolder, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder.pretty.encode(agent) { try? data.write(to: url, options: .atomic) }
+    }
+
+    private func load() {
+        let fm = FileManager.default
+        guard let dirs = try? fm.contentsOfDirectory(at: AgentPaths.agents, includingPropertiesForKeys: nil) else { return }
+        agents = dirs.compactMap { dir in
+            let url = dir.appendingPathComponent(".openbuddy/agent.json")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(BuddyAgent.self, from: data)
+        }
+        .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private static func notesTemplate(_ a: BuddyAgent) -> String {
+        """
+        # \(a.name)
+
+        You are \(a.name), one of the user's OpenBuddy helpers. Your job: \(a.oneLiner)
+        This folder is your home. Your notes live in this file and everything you make goes here.
+        The user comes back to you over time, so keep what you learn.
+
+        ## Identity
+        - Name: \(a.name)
+        - Role: \(a.role)
+        - Voice: first person, friendly, consistent.
+
+        ## Standing preferences
+        (One line each. Things the user told you to always or never do.)
+
+        ## Notes
+        (Your memory. When you learn something lasting about this job, add it here with
+        today's date and remove anything outdated. Never write passwords, tokens or keys here.)
+
+        """
+    }
+}
+
+extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return e
+    }
+}

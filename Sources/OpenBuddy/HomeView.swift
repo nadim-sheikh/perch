@@ -44,6 +44,21 @@ final class HomeRouter: ObservableObject {
     static let shared = HomeRouter()
     @Published var settings: SettingsSection?
     @Published var search = ""
+    /// Agent whose chat is open (takes priority over a buddy chat).
+    @Published var selectedAgent: String?
+    @Published var showNewAgent = false
+
+    func openAgent(_ slug: String) {
+        settings = nil
+        selectedAgent = slug
+        AgentManager.shared.clearUnread(slug)
+    }
+
+    func openChat(_ id: UUID?) {
+        settings = nil
+        selectedAgent = nil
+        ConversationStore.shared.selectedID = id
+    }
 }
 
 struct HomeView: View {
@@ -67,6 +82,8 @@ struct HomeView: View {
                 Group {
                     if let section = router.settings {
                         SettingsPage(section: section)
+                    } else if let slug = router.selectedAgent, let agent = AgentRoster.shared.agent(slug) {
+                        AgentChatView(agent: agent).id(slug)
                     } else if let c = store.selected {
                         ConversationView(conversation: c)
                     } else {
@@ -83,6 +100,12 @@ struct HomeView: View {
         }
         .frame(minWidth: 760, minHeight: 500)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $router.showNewAgent) {
+            NewAgentSheet { agent in
+                router.showNewAgent = false
+                if let agent { router.openAgent(agent.id) }
+            }
+        }
     }
 }
 
@@ -92,6 +115,15 @@ struct HomeSidebar: View {
     @ObservedObject var router = HomeRouter.shared
     @ObservedObject var store = ConversationStore.shared
     @AppStorage("buddyName") private var buddyName = "Buddy"
+
+    @ObservedObject var roster = AgentRoster.shared
+    @ObservedObject var agents = AgentManager.shared
+
+    var filteredAgents: [BuddyAgent] {
+        let q = router.search.trimmingCharacters(in: .whitespaces).lowercased()
+        return roster.agents.filter { !$0.archived && (q.isEmpty || $0.name.lowercased().contains(q)) }
+            .sorted { agents.lastActivity($0.id) > agents.lastActivity($1.id) }
+    }
 
     var filtered: [Conversation] {
         let q = router.search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -117,18 +149,34 @@ struct HomeSidebar: View {
                 .padding(.horizontal, 10).frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
 
-                Button { store.newConversation() } label: { Image(systemName: "plus") }
-                    .buttonStyle(IconButtonStyle())
+                Menu {
+                    Button("New chat") { router.openChat(store.newConversation()) }
+                    Button("New helper…") { router.showNewAgent = true }
+                } label: { Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.textSecondary) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                    .frame(width: 28, height: 28)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
-                    .help("New chat")
+                    .help("New chat or helper")
             }
             .padding(.horizontal, 12)
 
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    ForEach(filteredAgents) { a in
+                        AgentRow(agent: a, selected: router.selectedAgent == a.id)
+                            .onTapGesture { router.openAgent(a.id) }
+                            .contextMenu {
+                                Button("Open folder") { NSWorkspace.shared.open(a.folder) }
+                                Button("Archive") { AgentRoster.shared.setArchived(a.id, true) }
+                            }
+                    }
+                    if !filtered.isEmpty {
+                        Text("CHATS").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8).padding(.top, 10)
+                    }
                     ForEach(filtered) { c in
-                        ConversationRow(conversation: c, selected: c.id == store.selectedID)
-                            .onTapGesture { store.selectedID = c.id }
+                        ConversationRow(conversation: c, selected: router.selectedAgent == nil && c.id == store.selectedID)
+                            .onTapGesture { router.openChat(c.id) }
                             .contextMenu {
                                 Button("Delete", role: .destructive) { store.delete(c.id) }
                             }
@@ -155,6 +203,44 @@ struct HomeSidebar: View {
             }
             .padding(.horizontal, 14).padding(.bottom, 12)
         }
+    }
+}
+
+struct AgentRow: View {
+    let agent: BuddyAgent
+    let selected: Bool
+    @ObservedObject var manager = AgentManager.shared
+    @State private var hovering = false
+
+    var body: some View {
+        let turn = manager.lastTurn(agent.id)
+        let working = manager.running.contains(agent.id)
+        HStack(spacing: 10) {
+            AgentAvatar(agent: agent, size: 30, working: working)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(agent.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Spacer()
+                    if manager.unread.contains(agent.id) {
+                        Circle().fill(Theme.accent).frame(width: 7, height: 7)
+                    } else if let t = turn {
+                        Text((t.finishedAt ?? t.startedAt).shortTime).font(.system(size: 10))
+                            .foregroundStyle(selected ? Color.black.opacity(0.55) : Theme.textSecondary)
+                    }
+                }
+                Text(working ? (turn?.steps.last?.present ?? "Working on it…") : (turn?.summary ?? turn?.prompt ?? agent.role))
+                    .font(.system(size: 11)).lineLimit(1)
+                    .foregroundStyle(selected ? Color.black.opacity(0.6) : Theme.textSecondary)
+            }
+        }
+        .foregroundStyle(selected ? Color.black : Theme.textPrimary)
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(selected ? AnyShapeStyle(Theme.userBubble) : AnyShapeStyle(hovering ? Theme.hover : .clear))
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 
@@ -220,7 +306,7 @@ struct HomeEmptyState: View {
             ZStack(alignment: .top) {
                 TalkButton(title: "Hi, how can I help?")
                     .padding(.top, 52)
-                MascotView(size: 78)
+                MascotView(size: 78, animated: true)
             }
             Text(greeting).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.textPrimary)
             Text("Hold Control + Option and tell me what you need.")
