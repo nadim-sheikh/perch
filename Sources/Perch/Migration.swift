@@ -5,6 +5,10 @@ import Security
 enum Migration {
     static func run() {
         let d = UserDefaults.standard
+        if !d.bool(forKey: "switchedToNaturalVoice") {
+            if d.string(forKey: "voiceEngine") != "off" { d.set("kokoro", forKey: "voiceEngine") }
+            d.set(true, forKey: "switchedToNaturalVoice")
+        }
         if !d.bool(forKey: "migratedDefaultsFromOpenBuddy"), let old = UserDefaults(suiteName: "dev.openbuddy.app") {
             let keys = ["provider", "anthropicModel", "openaiModel", "openrouterModel", "voiceEngine", "openaiVoice",
                         "systemVoiceID", "cursorColorHex", "buddyName", "followCursor", "showInDock", "showInRecordings",

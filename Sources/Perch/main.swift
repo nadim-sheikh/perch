@@ -8,7 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notch = NotchController()
     private let companion = Companion.shared
     private let hotkey = PushToTalkMonitor()
-    private var homeWindow: NSWindow?
     private var askPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,11 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         notch.show()
         IntegrationSuggestions.shared.start()
+        if let i = CommandLine.arguments.firstIndex(of: "--say"), i + 1 < CommandLine.arguments.count {
+            let line = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { Companion.shared.announce(line) }
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--ask"), i + 1 < CommandLine.arguments.count {
             let question = CommandLine.arguments[i + 1]
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { Companion.shared.askTyped(question) }
         }
         SpeechRecognizer.preloadParakeet()
+        Speaker.warmUp()
 
         hotkey.onPress = { [weak self] in self?.companion.beginListening() }
         hotkey.onRelease = { [weak self] in self?.companion.endListening() }
@@ -78,144 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return i
     }
 
-    private var homeCover: NSView?
-    private var homeMonitors: [Any] = []
-    private var homeObservers: [NSObjectProtocol] = []
-    private var homeIdleTimer: Timer?
-    private var homeLastActivity = Date()
-
-    /// Home collapses back into the notch on an outside click, app switch, Escape,
-    /// or after a while with no activity (like the notch itself).
-    private func armHomeDismissal() {
-        disarmHomeDismissal()
-        homeLastActivity = Date()
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let w = self.homeWindow, !w.frame.contains(NSEvent.mouseLocation) else { return }
-                if NotchModel.shared.textInputOpen { return }
-                self.hideHome()
-            }
-        }) { homeMonitors.append(m) }
-        if let m = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel, .mouseMoved], handler: { [weak self] e in
-            MainActor.assumeIsolated { self?.homeLastActivity = Date() }
-            return e
-        }) { homeMonitors.append(m) }
-        let ws = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
-                if app?.processIdentifier != ProcessInfo.processInfo.processIdentifier { self?.hideHome() }
-            }
-        }
-        homeObservers.append(ws)
-        homeIdleTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let w = self.homeWindow else { return }
-                let inside = w.frame.contains(NSEvent.mouseLocation)
-                if inside { self.homeLastActivity = Date() }
-                let busy = BuddyState.shared.phase != .idle
-                if !busy && Date().timeIntervalSince(self.homeLastActivity) > 45 { self.hideHome() }
-            }
-        }
-    }
-
-    private func disarmHomeDismissal() {
-        homeMonitors.forEach { NSEvent.removeMonitor($0) }
-        homeMonitors.removeAll()
-        homeObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
-        homeObservers.removeAll()
-        homeIdleTimer?.invalidate()
-        homeIdleTimer = nil
-    }
-
-    /// The notch's own rectangle at the top of the screen (where Home morphs from/to).
-    private func notchFrame(_ screen: NSScreen) -> NSRect {
-        let n = NotchModel.shared
-        return NSRect(x: screen.frame.midX - n.collapsedWidth / 2, y: screen.frame.maxY - n.notchHeight,
-                      width: n.collapsedWidth, height: n.notchHeight)
-    }
-
+    /// Home lives inside the notch panel: one shape that grows and shrinks.
     func showHome() {
-        let screen = NSScreen.screens.first ?? NSScreen.main!
-        let size = CGSize(width: 880, height: 580)
-        let target = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height,
-                            width: size.width, height: size.height)
-
-        if homeWindow == nil {
-            let w = HomePanel(contentRect: target, styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
-            w.isOpaque = false
-            w.backgroundColor = .clear
-            w.hasShadow = true
-            w.level = .statusBar + 2
-            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            w.appearance = NSAppearance(named: .darkAqua)
-            w.isReleasedWhenClosed = false
-            w.minSize = NSSize(width: 760, height: 480)
-            let host = NSHostingView(rootView: HomeView(onClose: { [weak self] in self?.hideHome() }))
-            let container = NSView()
-            container.wantsLayer = true
-            host.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(host)
-            // Black cover = the notch itself; it fades away once the shape has grown.
-            let cover = NSView()
-            cover.wantsLayer = true
-            cover.layer?.backgroundColor = NSColor.black.cgColor
-            cover.layer?.cornerRadius = 14
-            cover.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(cover)
-            for v in [host, cover] {
-                NSLayoutConstraint.activate([
-                    v.leadingAnchor.constraint(equalTo: container.leadingAnchor), v.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                    v.topAnchor.constraint(equalTo: container.topAnchor), v.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                ])
-            }
-            w.contentView = container
-            homeCover = cover
-            homeWindow = w
-            AppAppearance.apply()
-        }
-        guard let w = homeWindow, let cover = homeCover else { return }
         NSApp.activate(ignoringOtherApps: true)
-        if w.isVisible && w.alphaValue > 0.9 { w.makeKeyAndOrderFront(nil); return }
-
-        NotchModel.shared.homeOpen = true
-        armHomeDismissal()
-        cover.alphaValue = 1
-        w.alphaValue = 1
-        w.setFrame(notchFrame(screen), display: false)
-        w.makeKeyAndOrderFront(nil)
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.45
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
-            w.animator().setFrame(target, display: true)
-        }, completionHandler: {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.22
-                cover.animator().alphaValue = 0
-            }
-        })
+        NotchModel.shared.openHomePanel()
     }
 
     func hideHome() {
-        guard let w = homeWindow, w.isVisible, let cover = homeCover else { return }
-        disarmHomeDismissal()
-        let screen = NSScreen.screens.first ?? NSScreen.main!
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.12
-            cover.animator().alphaValue = 1
-        }, completionHandler: {
-            MainActor.assumeIsolated {
-                NSAnimationContext.runAnimationGroup({ ctx in
-                    ctx.duration = 0.32
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, 0.0, 0.7, 0.4)
-                    w.animator().setFrame(self.notchFrame(screen), display: true)
-                }, completionHandler: {
-                    MainActor.assumeIsolated {
-                        w.orderOut(nil)
-                        NotchModel.shared.homeOpen = false
-                    }
-                })
-            }
-        })
+        NotchModel.shared.closeHome()
     }
 
     @objc func openHomeFromMenu() {
@@ -287,11 +161,3 @@ MainActor.assumeIsolated {
     app.run()
 }
 
-/// Borderless Home panel that hangs from the notch.
-final class HomePanel: NSWindow {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-    override func cancelOperation(_ sender: Any?) {
-        (NSApp.delegate as? AppDelegate)?.hideHome()
-    }
-}

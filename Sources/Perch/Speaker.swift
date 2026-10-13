@@ -1,4 +1,36 @@
 import AVFoundation
+import FluidAudio
+
+/// Local Kokoro text-to-speech: natural voices on the Neural Engine.
+actor Kokoro {
+    static let shared = Kokoro()
+    private var manager: KokoroAneManager?
+    private var loading: Task<Void, Error>?
+
+    static let voices: [(id: String, name: String)] = [
+        ("af_heart", "Heart (warm)"), ("af_bella", "Bella (bright)"), ("af_nicole", "Nicole (soft)"),
+        ("af_sarah", "Sarah (calm)"), ("bf_emma", "Emma (British)"), ("am_michael", "Michael"),
+    ]
+
+    func prepare() async throws {
+        if manager != nil { return }
+        if let loading { try await loading.value; return }
+        let t = Task {
+            let m = KokoroAneManager(version: .v3)
+            try await m.initialize()
+            manager = m
+        }
+        loading = t
+        defer { loading = nil }
+        try await t.value
+    }
+
+    func synthesize(_ text: String, voice: String) async throws -> Data {
+        try await prepare()
+        guard let manager else { throw CancellationError() }
+        return try await manager.synthesize(text: text, voice: voice)
+    }
+}
 
 /// Speaks replies with either a built-in macOS voice or OpenAI's TTS.
 @MainActor
@@ -23,15 +55,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         switch settings.voiceEngine {
         case .off:
             return
-        case .openai where !settings.openaiKey.isEmpty:
-            if await speakOpenAI(clean, key: settings.openaiKey, voice: settings.openaiVoice) { return }
-            await speakSystem(clean)
-        default:
-            await speakSystem(clean)
+        case .kokoro:
+            _ = await speakKokoro(clean, voice: settings.kokoroVoice)
         }
     }
 
     func stop() {
+        generation += 1
         synth.stopSpeaking(at: .immediate)
         player?.stop()
         player = nil
@@ -47,6 +77,49 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             done = cont
             synth.speak(utterance)
         }
+    }
+
+    /// Speaks sentence by sentence: the next one renders while the current one plays.
+    private func speakKokoro(_ text: String, voice: String) async -> Bool {
+        let sentences = Self.sentences(text)
+        guard !sentences.isEmpty else { return true }
+        generation += 1
+        let gen = generation
+        var next: Task<Data?, Never>? = Task { try? await Kokoro.shared.synthesize(sentences[0], voice: voice) }
+        for i in sentences.indices {
+            guard let data = await next?.value, gen == generation else { return i > 0 }
+            next = i + 1 < sentences.count
+                ? Task { [s = sentences[i + 1]] in try? await Kokoro.shared.synthesize(s, voice: voice) } : nil
+            guard let player = try? AVAudioPlayer(data: data) else { return false }
+            self.player = player
+            player.delegate = self
+            await withCheckedContinuation { cont in
+                done = cont
+                player.play()
+            }
+            if gen != generation { return true }
+        }
+        return true
+    }
+
+    private var generation = 0
+
+    static func sentences(_ text: String) -> [String] {
+        var out: [String] = []
+        text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { s, _, _, _ in
+            if let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { out.append(s) }
+        }
+        // Merge very short bits so the voice doesn't sound choppy.
+        var merged: [String] = []
+        for s in out {
+            if let last = merged.last, last.count < 40 { merged[merged.count - 1] = last + " " + s } else { merged.append(s) }
+        }
+        return merged
+    }
+
+    static func warmUp() {
+        guard AppSettings.shared.voiceEngine == .kokoro else { return }
+        Task.detached(priority: .utility) { try? await Kokoro.shared.prepare() }
     }
 
     private func speakOpenAI(_ text: String, key: String, voice: String) async -> Bool {

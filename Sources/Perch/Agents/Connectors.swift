@@ -24,9 +24,18 @@ struct ConnectorDefinition: Identifiable, Hashable, Codable {
     var auth: Auth
     var useCases: [String] = []
     var isCustom = false
+    var domain: String? { ConnectorCatalog.domains[id] }
 }
 
 enum ConnectorCatalog {
+    /// Each service's own website, used to load its real logo.
+    static let domains: [String: String] = [
+        "notion": "notion.so", "linear": "linear.app", "atlassian": "atlassian.com", "asana": "asana.com",
+        "todoist": "todoist.com", "slack": "slack.com", "hubspot": "hubspot.com", "figma": "figma.com",
+        "canva": "canva.com", "github": "github.com", "vercel": "vercel.com", "supabase": "supabase.com",
+        "sentry": "sentry.io", "stripe": "stripe.com", "google-workspace": "workspace.google.com", "airtable": "airtable.com",
+    ]
+
     static let all: [ConnectorDefinition] = [
         .init(id: "notion", name: "Notion", category: "Docs", symbol: "doc.richtext", colorHex: "#2F3437",
               blurb: "Read and write pages and databases.", transport: .http(url: "https://mcp.notion.com/mcp"), auth: .browser,

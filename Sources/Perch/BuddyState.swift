@@ -19,7 +19,10 @@ final class BuddyState: ObservableObject {
     /// Buddy position in global AppKit coordinates (origin bottom-left of main screen).
     @Published var position: CGPoint = NSEvent.mouseLocation
     @Published var phase: BuddyPhase = .idle
-    @Published var bubbleText: String = ""
+    @Published var bubbleText: String = "" {
+        didSet { if bubbleText != oldValue { bubbleChangedAt = Date() } }
+    }
+    private var bubbleChangedAt = Date()
     @Published var pointLabel: String?
     @Published var audioLevel: Float = 0
     @Published var navigation: Navigation = .following
@@ -57,6 +60,12 @@ final class BuddyState: ObservableObject {
     }
 
     private func followTick() {
+        // Safety net: a bubble that hasn't changed for a while always fades away.
+        if !bubbleText.isEmpty, phase != .listening, phase != .thinking {
+            let quiet = Date().timeIntervalSince(bubbleChangedAt)
+            let limit = phase == .responding ? 30.0 : 5.0 + Double(bubbleText.count) / 40
+            if quiet > limit { withAnimation(.easeOut(duration: 0.35)) { bubbleText = "" } }
+        }
         let mouse = NSEvent.mouseLocation
         if navigation == .pointing {
             // If the user moves the mouse a lot while we point, give up and come back.

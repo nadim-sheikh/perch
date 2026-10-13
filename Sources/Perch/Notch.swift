@@ -8,8 +8,8 @@ final class NotchModel: ObservableObject {
     static let shared = NotchModel()
 
     enum Presentation: Equatable {
-        case docked, listening, thinking, speaking, agents, peek, textInput, textResponse, suggestion
-        var isCard: Bool { self == .peek || self == .textInput || self == .textResponse || self == .suggestion }
+        case docked, listening, thinking, speaking, agents, peek, textInput, textResponse, suggestion, home
+        var isCard: Bool { self != .docked && self != .listening && self != .thinking && self != .speaking && self != .agents }
     }
 
     @Published var presentation: Presentation = .docked
@@ -33,6 +33,25 @@ final class NotchModel: ObservableObject {
     var openSettings: (() -> Void)?
     var requestKeyFocus: (() -> Void)?
     var releaseKeyFocus: (() -> Void)?
+
+    static let homeSize = CGSize(width: 880, height: 580)
+    var homeLastActivity = Date()
+
+    /// Grows the notch into the full Home panel.
+    func openHomePanel() {
+        homeLastActivity = Date()
+        guard !homeOpen else { requestKeyFocus?(); return }
+        textInputOpen = false
+        homeOpen = true
+        requestKeyFocus?()
+    }
+
+    /// Shrinks Home back into the notch.
+    func closeHome() {
+        guard homeOpen else { return }
+        homeOpen = false
+        releaseKeyFocus?()
+    }
 
     /// Opens the typing box in the notch.
     func openTextInput() {
@@ -86,7 +105,9 @@ final class NotchController {
     private var lastRotation = Date()
     private var lastTick = Date()
     private var clickMonitor: Any?
-    private let panelSize = CGSize(width: 560, height: 420)
+    private let panelSize = CGSize(width: 920, height: 640)
+    private var homeMouseLeftAt: Date?
+    private var inputMonitor: Any?
 
     func show() {
         let view = NotchRootView()
@@ -121,6 +142,20 @@ final class NotchController {
                 guard let self else { return }
                 if self.model.textInputOpen { self.model.closeTextInput(sent: false) }
                 if self.model.presentation == .peek { self.suppressUntilReentry = true }
+                if self.model.homeOpen && NSApp.modalWindow == nil { self.model.closeHome() }
+            }
+        }
+        // Any typing or clicking inside Perch counts as activity for Home's idle timer.
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel]) { [weak self] e in
+            MainActor.assumeIsolated { self?.model.homeLastActivity = Date() }
+            return e
+        }
+        // Switching to another app folds Home away.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated {
+                guard let self, self.model.homeOpen, app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                self.model.homeOpen = false
             }
         }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
@@ -151,6 +186,7 @@ final class NotchController {
         case .textInput: return CGSize(width: 480, height: 150)
         case .textResponse: return CGSize(width: 480, height: 330)
         case .suggestion: return CGSize(width: 560, height: 140)
+        case .home: return NotchModel.homeSize
         }
     }
 
@@ -178,7 +214,8 @@ final class NotchController {
         let mouse = NSEvent.mouseLocation
         let current = model.presentation
         let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(mouse)
-        panel.ignoresMouseEvents = !inside && !model.textInputOpen
+        panel.ignoresMouseEvents = !inside && !model.textInputOpen && current != .home
+        if current == .home { homeDismissCheck(inside: inside, now: now) } else { homeMouseLeftAt = nil }
         if model.hovering != inside { model.hovering = inside }
 
         // Hover dwell → peek, with re-entry suppression after an explicit dismiss.
@@ -216,15 +253,27 @@ final class NotchController {
 
         let next = resolve(wantsPeek: wantsPeek)
         if next != current {
-            let spring: Animation = next.isCard
-                ? .spring(response: 0.42, dampingFraction: 0.78)
-                : .spring(response: 0.36, dampingFraction: 0.86)
+            let spring: Animation = next == .home || current == .home
+                ? .spring(response: 0.5, dampingFraction: 0.84)
+                : next.isCard ? .spring(response: 0.42, dampingFraction: 0.78) : .spring(response: 0.36, dampingFraction: 0.86)
             withAnimation(spring) { model.presentation = next }
         }
     }
 
-    /// Priority: typing > answer > voice > peek > helpers > docked.
+    /// Home folds back into the notch when the mouse wanders off or nothing happens for a while.
+    private func homeDismissCheck(inside: Bool, now: Date) {
+        let window = panel
+        let busy = BuddyState.shared.phase != .idle || window.attachedSheet != nil || NSApp.modalWindow != nil
+            || NSApp.windows.contains { $0.isSheet && $0.isVisible }
+        if inside { homeMouseLeftAt = nil } else if homeMouseLeftAt == nil { homeMouseLeftAt = now }
+        let typing = window.firstResponder is NSTextView && now.timeIntervalSince(model.homeLastActivity) < 10
+        if !busy, !typing, let left = homeMouseLeftAt, now.timeIntervalSince(left) > 1.6 { model.closeHome() }
+        if !busy, now.timeIntervalSince(model.homeLastActivity) > 45 { model.closeHome() }
+    }
+
+    /// Priority: home > typing > answer > voice > peek > helpers > docked.
     private func resolve(wantsPeek: Bool) -> NotchModel.Presentation {
+        if model.homeOpen { return .home }
         if model.textInputOpen { return .textInput }
         if model.responseVisible { return .textResponse }
         if IntegrationSuggestions.shared.current != nil && BuddyState.shared.phase == .idle { return .suggestion }
@@ -286,6 +335,7 @@ struct NotchRootView: View {
         case .textInput: return CGSize(width: 470, height: model.notchHeight + 92)
         case .textResponse: return CGSize(width: 470, height: responseHeight)
         case .suggestion: return CGSize(width: 550, height: model.notchHeight + 96)
+        case .home: return NotchModel.homeSize
         }
     }
 
@@ -309,8 +359,8 @@ struct NotchRootView: View {
                     CornerGlow(color: accent).frame(width: size.width + 60, height: size.height + 40).id("glow")
                 }
 
-                NotchShape(radius: model.presentation.isCard ? 24 : 11)
-                    .fill(Color.black)
+                NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11)
+                    .fill(model.presentation == .home ? Theme.window : Color.black)
                     .shadow(color: .black.opacity(model.presentation.isCard ? 0.45 : 0), radius: 18, y: 6)
                     .onTapGesture { if model.presentation == .docked || model.presentation == .agents { model.openHome?(nil) } }
 
@@ -323,10 +373,15 @@ struct NotchRootView: View {
                     case .textInput: NotchTextInput().padding(.horizontal, 26)
                     case .textResponse: NotchTextResponse().padding(.horizontal, 26)
                     case .suggestion: NotchSuggestion().padding(.horizontal, 24)
+                    case .home:
+                        HomeView(onClose: { model.closeHome() })
+                            .padding(.horizontal, 8)
+                            .clipShape(NotchShape(radius: 28))
                     }
                 }
                 .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(.easeOut(duration: 0.22).delay(0.08)),
+                    insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+                        .animation(.easeOut(duration: 0.22).delay(model.presentation == .home ? 0.2 : 0.08)),
                     removal: .opacity.animation(.easeIn(duration: 0.1))))
                 .id(model.presentation)
             }
@@ -762,9 +817,7 @@ struct NotchSuggestion: View {
                     HStack(spacing: -6) {
                         RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.16, green: 0.2, blue: 0.32))
                             .frame(width: 30, height: 30).overlay(MascotView(size: 22))
-                        RoundedRectangle(cornerRadius: 8).fill(Color(hex: def.colorHex) ?? .gray)
-                            .frame(width: 30, height: 30)
-                            .overlay(Image(systemName: def.symbol).font(.system(size: 13, weight: .bold)).foregroundStyle(.white))
+                        ConnectorLogo(def: def, size: 30)
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.black, lineWidth: 2))
                     }
                     VStack(alignment: .leading, spacing: 1) {

@@ -155,6 +155,7 @@ struct IntegrationsSettingsPage: View {
                 ForEach(store.enabled) { def in
                     SettingsRow(title: def.name, subtitle: statusText(def), last: def.id == store.enabled.last?.id) {
                         HStack(spacing: 6) {
+                            ConnectorLogo(def: def, size: 22)
                             if store.status[def.id] == .needsSignIn {
                                 Button("Sign in") { store.signInAgain(def) }.buttonStyle(ChipStyle(light: true))
                             }
@@ -205,9 +206,7 @@ private struct ConnectorCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                RoundedRectangle(cornerRadius: 8).fill(Color(hex: def.colorHex) ?? .gray)
-                    .frame(width: 30, height: 30)
-                    .overlay(Image(systemName: def.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white))
+                ConnectorLogo(def: def, size: 32)
                 Spacer()
                 Button("Connect", action: onConnect).buttonStyle(ChipStyle(light: true))
             }

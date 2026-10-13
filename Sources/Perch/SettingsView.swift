@@ -287,7 +287,9 @@ private struct AIPage: View {
 }
 
 private struct VoicePage: View {
-    @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.system.rawValue
+    @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.kokoro.rawValue
+    @AppStorage("kokoroVoice") private var kokoroVoice = "af_heart"
+    @State private var previewing = false
     @AppStorage("openaiVoice") private var openaiVoice = "alloy"
     @AppStorage("systemVoiceID") private var systemVoiceID = ""
 
@@ -303,27 +305,23 @@ private struct VoicePage: View {
                 .onTapGesture { voiceEngine = e.rawValue }
             }
         }
-        if voiceEngine == VoiceEngine.openai.rawValue {
-            SettingsGroup(title: "OpenAI voice") {
-                SettingsRow(title: "Voice", subtitle: "Needs an OpenAI key.", last: true) {
-                    Picker("", selection: $openaiVoice) {
-                        ForEach(Speaker.openAIVoices, id: \.self) { Text($0.capitalized).tag($0) }
-                    }
-                    .labelsHidden().frame(width: 160)
-                }
-            }
-        }
-        if voiceEngine == VoiceEngine.system.rawValue {
-            SettingsGroup(title: "macOS voice") {
-                SettingsRow(title: "Voice", subtitle: nil, last: true) {
-                    Picker("", selection: $systemVoiceID) {
-                        Text("Default").tag("")
-                        ForEach(AVSpeechSynthesisVoice.speechVoices()
-                            .filter { $0.language.hasPrefix(String(Locale.current.identifier.prefix(2))) }, id: \.identifier) {
-                            Text($0.name).tag($0.identifier)
+        if voiceEngine == VoiceEngine.kokoro.rawValue {
+            SettingsGroup(title: "Natural voice") {
+                SettingsRow(title: "Voice", subtitle: "Runs privately on your Mac. First use downloads ~330 MB.", last: true) {
+                    HStack(spacing: 6) {
+                        Picker("", selection: $kokoroVoice) {
+                            ForEach(Kokoro.voices, id: \.id) { Text($0.name).tag($0.id) }
                         }
+                        .labelsHidden().frame(width: 160)
+                        Button(previewing ? "…" : "Play") {
+                            previewing = true
+                            Task {
+                                Companion.shared.announce("Hey! I'm Perch. This is how I sound now. Better, right?")
+                                previewing = false
+                            }
+                        }
+                        .buttonStyle(ChipStyle(light: true))
                     }
-                    .labelsHidden().frame(width: 180)
                 }
             }
         }

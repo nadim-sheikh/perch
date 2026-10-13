@@ -113,16 +113,9 @@ struct HomeView: View {
         .overlay(alignment: .top) {
             // The top edge fades from black so Home reads as the notch opening up.
             LinearGradient(colors: [.black, .black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .frame(height: 90)
+                .frame(height: 80)
                 .allowsHitTesting(false)
         }
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous))
-        .overlay(alignment: .bottom) {
-            // Hairline only on the lower edge so the top melts into the notch.
-            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 26, bottomTrailingRadius: 26, topTrailingRadius: 0, style: .continuous)
-                .stroke(LinearGradient(colors: [.clear, .white.opacity(0.08)], startPoint: .top, endPoint: .center), lineWidth: 1)
-        }
-        .frame(minWidth: 760, minHeight: 480)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $router.showNewGroup) {
             NewGroupSheet { group in

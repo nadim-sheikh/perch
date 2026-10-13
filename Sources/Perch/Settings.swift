@@ -24,14 +24,12 @@ enum LLMProvider: String, CaseIterable, Identifiable {
 }
 
 enum VoiceEngine: String, CaseIterable, Identifiable {
-    case system
-    case openai
+    case kokoro
     case off
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .system: return "macOS voice (free, offline)"
-        case .openai: return "OpenAI voice"
+        case .kokoro: return "Natural voice (on-device)"
         case .off: return "Don't speak"
         }
     }
@@ -78,7 +76,8 @@ final class AppSettings: ObservableObject {
     @AppStorage("anthropicModel") var anthropicModel: String = LLMProvider.anthropic.defaultModel
     @AppStorage("openaiModel") var openaiModel: String = LLMProvider.openai.defaultModel
     @AppStorage("openrouterModel") var openrouterModel: String = LLMProvider.openrouter.defaultModel
-    @AppStorage("voiceEngine") var voiceEngineRaw: String = VoiceEngine.system.rawValue
+    @AppStorage("voiceEngine") var voiceEngineRaw: String = VoiceEngine.kokoro.rawValue
+    @AppStorage("kokoroVoice") var kokoroVoice: String = "af_heart"
     @AppStorage("openaiVoice") var openaiVoice: String = "alloy"
     @AppStorage("systemVoiceID") var systemVoiceID: String = ""
     @AppStorage("cursorColorHex") var cursorColorHex: String = "#3B82F6"
@@ -101,7 +100,7 @@ final class AppSettings: ObservableObject {
     }
 
     var voiceEngine: VoiceEngine {
-        get { VoiceEngine(rawValue: voiceEngineRaw) ?? .system }
+        get { VoiceEngine(rawValue: voiceEngineRaw) ?? .kokoro }
         set { voiceEngineRaw = newValue.rawValue }
     }
 
