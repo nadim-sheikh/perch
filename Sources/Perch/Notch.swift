@@ -26,7 +26,9 @@ final class NotchModel: ObservableObject {
 
     var notchHeight: CGFloat = 32
     var hardwareNotchWidth: CGFloat = 0
-    var collapsedWidth: CGFloat { max(hardwareNotchWidth, 150) + 64 }
+    /// Docked width. Under a real camera notch it hugs the notch with ears; on other screens
+    /// it's just a small pill holding the mascot.
+    var collapsedWidth: CGFloat { hardwareNotchWidth > 0 ? hardwareNotchWidth + 64 : 54 }
 
     var openHome: ((UUID?) -> Void)?
     var openAgent: ((String) -> Void)?
@@ -70,7 +72,9 @@ final class NotchModel: ObservableObject {
         let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         let label = ceil((stripLabel(p) as NSString).size(withAttributes: [.font: font]).width)
         let ear = 14 + 18 + 7 + label + 12
-        return max(collapsedWidth + 120, max(hardwareNotchWidth, 0) + 10 + 2 * ear)
+        if hardwareNotchWidth > 0 { return max(collapsedWidth + 120, hardwareNotchWidth + 10 + 2 * ear) }
+        // No camera notch: no gap in the middle, just mascot + label on the left and the indicator on the right.
+        return ear + 14 + 30 + 14
     }
 
     /// Shrinks Home back into the notch.
@@ -189,7 +193,8 @@ final class NotchController {
                 guard let self else { return }
                 if self.model.textInputOpen { self.model.closeTextInput(sent: false) }
                 if self.model.presentation == .peek { self.suppressUntilReentry = true }
-                if self.model.homeOpen && NSApp.modalWindow == nil { self.model.closeHome() }
+                let busy = BuddyState.shared.phase == .thinking || BuddyState.shared.phase == .responding
+                if self.model.homeOpen && NSApp.modalWindow == nil && !busy { self.model.closeHome() }
             }
         }
         // Any typing or clicking inside Perch counts as activity for Home's idle timer.
@@ -216,17 +221,46 @@ final class NotchController {
         }
     }
 
-    /// The screen that holds the island. It follows the mouse, so the notch is on whichever
-    /// display you're using: in the camera notch on a MacBook, a small pill on other screens.
+    /// The screen that holds the island.
     private(set) static var hostScreen: NSScreen? = NSScreen.main
+
+    enum ScreenRule: String, CaseIterable, Identifiable {
+        case automatic, main, followMouse
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .automatic: return "Automatic"
+            case .main: return "Main screen"
+            case .followMouse: return "Follow the mouse"
+            }
+        }
+    }
+
+    static var screenRule: ScreenRule { ScreenRule(rawValue: UserDefaults.standard.string(forKey: "notchScreen") ?? "") ?? .automatic }
 
     private static func screenUnderMouse() -> NSScreen? {
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first
     }
 
+    /// Automatic: a screen stacked above the main one gets the notch (it's where you look up to);
+    /// side by side, it stays on the main screen.
+    static func chosenScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        guard let main = screens.first else { return nil }
+        switch screenRule {
+        case .main: return main
+        case .followMouse: return screenUnderMouse()
+        case .automatic:
+            let above = screens.dropFirst().filter { $0.frame.minY >= main.frame.maxY - 2 }
+            return above.max { $0.frame.maxY < $1.frame.maxY } ?? main
+        }
+    }
+
+    func relayout() { layout() }
+
     private func layout() {
-        guard let s = Self.screenUnderMouse() else { return }
+        guard let s = Self.chosenScreen() else { return }
         Self.hostScreen = s
         // A real notch sets the height; elsewhere match the menu bar so the pill sits in it.
         let menuBar = s.frame.maxY - s.visibleFrame.maxY
@@ -284,8 +318,10 @@ final class NotchController {
         lastTick = now
         let mouse = NSEvent.mouseLocation
         let current = model.presentation
-        // Move to the display the mouse is on, but never while a card or Home is open on this one.
-        if !current.isCard, !model.textInputOpen, let s = Self.screenUnderMouse(), s != Self.hostScreen {
+        // Only "Follow the mouse" moves the island around; never while a card or Home is open.
+        // Re-place the island if the chosen screen changed (setting, monitors, or the mouse in
+        // "Follow the mouse" mode), but never while a card or Home is open.
+        if !current.isCard, !model.textInputOpen, let s = Self.chosenScreen(), s != Self.hostScreen {
             layout()
         }
         let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(mouse)
@@ -417,7 +453,7 @@ struct NotchRootView: View {
         }
     }
 
-    private var peekRows: Int { min(agentRows.count + min(store.conversations.count, 2), 5) }
+    private var peekRows: Int { agentRows.count + activeChats.count }
     private var peekHeight: CGFloat { model.notchHeight + 40 + CGFloat(max(peekRows, 1)) * 58 + 54 }
     private var responseHeight: CGFloat {
         let lines = max(1, model.responseText.count / 58 + model.responseText.filter { $0 == "\n" }.count + 1)
@@ -427,7 +463,13 @@ struct NotchRootView: View {
     private var agentRows: [BuddyAgent] {
         roster.agents.filter { !$0.archived && (agents.running.contains($0.id) || agents.lastTurn($0.id) != nil) }
             .sorted { agents.lastActivity($0.id) > agents.lastActivity($1.id) }
-            .prefix(3).map { $0 }
+            .prefix(2).map { $0 }
+    }
+
+    /// The peek shows just the chat you're in (or the latest one); Home lists them all.
+    private var activeChats: [Conversation] {
+        if let c = store.selected { return [c] }
+        return store.conversations.first.map { [$0] } ?? []
     }
 
     /// Keeps Home's content alive for a moment while the shape shrinks over it.
@@ -510,7 +552,7 @@ struct NotchRootView: View {
     // MARK: Compact states
 
     /// The width to keep clear in the middle of a compact strip for the camera housing.
-    private var notchGap: CGFloat { max(model.hardwareNotchWidth, 0) + 10 }
+    private var notchGap: CGFloat { model.hardwareNotchWidth > 0 ? model.hardwareNotchWidth + 10 : 0 }
 
     /// Lays a strip out as: left ear | clear centre (notch) | right ear.
     private func strip<L: View, R: View>(@ViewBuilder left: () -> L, @ViewBuilder right: () -> R) -> some View {
@@ -523,6 +565,19 @@ struct NotchRootView: View {
     }
 
     private var dockedView: some View {
+        Group {
+            if model.hardwareNotchWidth == 0 {
+                // Other screens: just the mascot, with a dot when a helper has news.
+                MascotView(size: 20, happy: true)
+                    .overlay(alignment: .topTrailing) {
+                        if !agents.unread.isEmpty { Circle().fill(accent).frame(width: 7, height: 7).offset(x: 3, y: -1) }
+                    }
+                    .frame(height: model.notchHeight)
+            } else { dockedNotchView }
+        }
+    }
+
+    private var dockedNotchView: some View {
         strip {
             // The mascot shows Perch is running, even with nothing happening.
             MascotView(size: 18, happy: true)
@@ -607,7 +662,7 @@ struct NotchRootView: View {
                             .onTapGesture { model.openAgent?(a.id) }
                             .modifier(StaggerIn(index: i))
                     }
-                    ForEach(Array(store.conversations.prefix(max(0, 5 - agentRows.count)).prefix(2).enumerated()), id: \.element.id) { i, c in
+                    ForEach(Array(activeChats.enumerated()), id: \.element.id) { i, c in
                         Divider().overlay(Color.white.opacity(0.1)).padding(.leading, 52).opacity(agentRows.isEmpty && i == 0 ? 0 : 1)
                         PeekRow(conversation: c)
                             .onTapGesture { model.openHome?(c.id) }

@@ -518,6 +518,8 @@ struct TalkButton: View {
     let title: String
     @ObservedObject var state = BuddyState.shared
     @State private var pressing = false
+    @State private var listening = false
+    @State private var pendingStart: DispatchWorkItem?
 
     var body: some View {
         Button {} label: {
@@ -530,11 +532,23 @@ struct TalkButton: View {
                 .onChanged { _ in
                     guard !pressing else { return }
                     pressing = true
-                    Companion.shared.beginListening()
+                    // Only a real press-and-hold starts listening. A quick click does nothing, so it
+                    // can't cut off a reply that's already playing.
+                    let w = DispatchWorkItem {
+                        listening = true
+                        Companion.shared.beginListening()
+                    }
+                    pendingStart = w
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
                 }
                 .onEnded { _ in
                     pressing = false
-                    Companion.shared.endListening()
+                    pendingStart?.cancel()
+                    pendingStart = nil
+                    if listening {
+                        listening = false
+                        Companion.shared.endListening()
+                    }
                 }
         )
     }

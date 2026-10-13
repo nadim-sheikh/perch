@@ -244,6 +244,9 @@ final class Companion {
             return
         }
         if !visible.isEmpty { store.append(Message(role: .assistant, text: visible), to: conversationID) }
+        // The saved reply replaces the live streaming copy right away (otherwise both show
+        // until speaking finishes, which looked like a duplicate reply).
+        store.streamingText = nil
 
         if !marks.isEmpty { state.show(marks: marks) }
         if let target = pointTarget, let screen = screens.first(where: { $0.index == target.screen }) ?? screens.first {

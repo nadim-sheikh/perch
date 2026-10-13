@@ -199,8 +199,20 @@ private struct GeneralPage: View {
     @AppStorage("showInDock") private var showInDock = false
     @AppStorage("showInRecordings") private var showInRecordings = true
     @AppStorage("notchPeek") private var notchPeek = true
+    @AppStorage("notchScreen") private var notchScreen = NotchController.ScreenRule.automatic.rawValue
 
     var body: some View {
+        SettingsGroup(title: "Notch") {
+            SettingsRow(title: "Show the notch on",
+                        subtitle: "Automatic: a screen above your main one gets it; side by side, it stays on the main screen.",
+                        last: true) {
+                Picker("", selection: $notchScreen) {
+                    ForEach(NotchController.ScreenRule.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 170)
+            }
+        }
+
         SettingsGroup(title: "Behavior") {
             SettingsRow(title: "Show in Dock", subtitle: nil) {
                 Toggle("", isOn: $showInDock).toggleStyle(GlassToggleStyle())

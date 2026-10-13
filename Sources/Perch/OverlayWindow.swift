@@ -77,7 +77,7 @@ struct BuddyOverlayView: View {
 
     private var cursorLayer: some View {
         GeometryReader { _ in
-            if screenFrame.insetBy(dx: -40, dy: -40).contains(state.position) {
+            if screenFrame.contains(state.position) {
                 let local = CGPoint(x: state.position.x - screenFrame.minX, y: screenFrame.maxY - state.position.y)
                 let overNotch = holdsNotch && local.y < 44 && abs(local.x - screenFrame.width / 2) < 280 && state.navigation == .following
                 ZStack(alignment: .topLeading) {
@@ -103,7 +103,8 @@ struct BuddyOverlayView: View {
                             .frame(maxWidth: 300, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                             .offset(bubbleOffset(for: local))
-                            .transition(.scale(scale: 0.6, anchor: .topLeading).combined(with: .opacity))
+                            .transition(.asymmetric(insertion: .scale(scale: 0.6, anchor: .topLeading).combined(with: .opacity),
+                                                removal: .opacity.animation(.easeOut(duration: 0.4))))
                     }
                 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.72), value: state.bubbleText.isEmpty)
@@ -145,11 +146,7 @@ struct BuddyCursor: View {
                     .onAppear { withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true } }
                     .onDisappear { spin = false }
             }
-            CursorShape()
-                .fill(color)
-                .overlay(CursorShape().stroke(.white.opacity(0.9), lineWidth: 1.2))
-                .frame(width: 15, height: 18)
-                .shadow(color: color.opacity(0.75), radius: 7)
+            CloudCursor(color: color)
                 .rotationEffect(.degrees(rotation))
                 .scaleEffect(scale)
             if phase == .listening {
@@ -232,6 +229,64 @@ struct WordRevealText: View {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { t in
             MainActor.assumeIsolated {
                 if revealed < total { revealed += 1 } else { t.invalidate() }
+            }
+        }
+    }
+}
+
+
+/// The buddy's cursor: a little cloud puff with a soft pointing tip, two blinking eyes and a blush.
+/// Same family as the mascot, but its own character.
+struct CloudPointer: Shape {
+    func path(in r: CGRect) -> Path {
+        let w = r.width, h = r.height
+        func c(_ x: CGFloat, _ y: CGFloat, _ rad: CGFloat) -> CGRect {
+            CGRect(x: r.minX + w * (x - rad), y: r.minY + h * y - w * rad, width: w * rad * 2, height: w * rad * 2)
+        }
+        var p = Path()
+        // the pointing tip, softened
+        p.move(to: CGPoint(x: r.minX + w * 0.04, y: r.minY + h * 0.03))
+        p.addQuadCurve(to: CGPoint(x: r.minX + w * 0.62, y: r.minY + h * 0.24), control: CGPoint(x: r.minX + w * 0.30, y: r.minY + h * 0.06))
+        p.addLine(to: CGPoint(x: r.minX + w * 0.24, y: r.minY + h * 0.64))
+        p.addQuadCurve(to: CGPoint(x: r.minX + w * 0.04, y: r.minY + h * 0.03), control: CGPoint(x: r.minX + w * 0.06, y: r.minY + h * 0.30))
+        p.closeSubpath()
+        // puffy cloud body
+        p.addEllipse(in: c(0.60, 0.62, 0.30))
+        p.addEllipse(in: c(0.38, 0.66, 0.22))
+        p.addEllipse(in: c(0.66, 0.40, 0.22))
+        p.addEllipse(in: c(0.80, 0.70, 0.18))
+        return p
+    }
+}
+
+struct CloudCursor: View {
+    let color: Color
+    @State private var blink = false
+
+    var body: some View {
+        ZStack {
+            CloudPointer()
+                .fill(LinearGradient(colors: [color.opacity(0.78), color], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .shadow(color: color.opacity(0.75), radius: 6)
+            HStack(spacing: 4) {
+                Capsule().fill(Color.white).frame(width: 2.0, height: blink ? 0.6 : 3.0)
+                Capsule().fill(Color.white).frame(width: 2.0, height: blink ? 0.6 : 3.0)
+            }
+            .offset(x: 2.4, y: 3.4)
+            HStack(spacing: 6.5) {
+                Ellipse().fill(Color.pink.opacity(0.5)).frame(width: 2.6, height: 1.6)
+                Ellipse().fill(Color.pink.opacity(0.5)).frame(width: 2.6, height: 1.6)
+            }
+            .offset(x: 2.4, y: 6.2)
+        }
+        .frame(width: 22, height: 24)
+        .task {
+            // A blink every few seconds; cheap, it only redraws this tiny view.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Double.random(in: 3...6)))
+                withAnimation(.easeInOut(duration: 0.07)) { blink = true }
+                try? await Task.sleep(for: .milliseconds(110))
+                withAnimation(.easeInOut(duration: 0.09)) { blink = false }
             }
         }
     }
