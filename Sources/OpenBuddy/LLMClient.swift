@@ -78,9 +78,17 @@ struct LLMClient {
             messages.append(["role": "user", "content": content])
             body = ["model": model, "max_tokens": 1024, "system": system, "stream": true, "messages": messages]
 
-        case .openai:
-            req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        case .openai, .openrouter:
+            // OpenRouter speaks the OpenAI Chat Completions format.
+            let endpoint = provider == .openrouter
+                ? "https://openrouter.ai/api/v1/chat/completions"
+                : "https://api.openai.com/v1/chat/completions"
+            req = URLRequest(url: URL(string: endpoint)!)
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            if provider == .openrouter {
+                req.setValue("https://github.com/openbuddy/openbuddy", forHTTPHeaderField: "HTTP-Referer")
+                req.setValue("OpenBuddy", forHTTPHeaderField: "X-Title")
+            }
             var content: [[String: Any]] = screens.flatMap { s -> [[String: Any]] in
                 [
                     ["type": "text", "text": screenCaption(s)],
@@ -114,7 +122,7 @@ struct LLMClient {
             guard obj["type"] as? String == "content_block_delta",
                   let delta = obj["delta"] as? [String: Any] else { return nil }
             return delta["text"] as? String
-        case .openai:
+        case .openai, .openrouter:
             guard let choices = obj["choices"] as? [[String: Any]],
                   let delta = choices.first?["delta"] as? [String: Any] else { return nil }
             return delta["content"] as? String

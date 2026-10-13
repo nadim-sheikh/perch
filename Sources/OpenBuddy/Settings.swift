@@ -5,9 +5,22 @@ import SwiftUI
 enum LLMProvider: String, CaseIterable, Identifiable {
     case anthropic
     case openai
+    case openrouter
     var id: String { rawValue }
-    var displayName: String { self == .anthropic ? "Claude (Anthropic)" : "OpenAI" }
-    var defaultModel: String { self == .anthropic ? "claude-sonnet-5-5" : "gpt-4o" }
+    var displayName: String {
+        switch self {
+        case .anthropic: return "Claude (Anthropic)"
+        case .openai: return "OpenAI"
+        case .openrouter: return "OpenRouter (any model)"
+        }
+    }
+    var defaultModel: String {
+        switch self {
+        case .anthropic: return "claude-sonnet-5-5"
+        case .openai: return "gpt-4o"
+        case .openrouter: return "anthropic/claude-sonnet-5.5"
+        }
+    }
 }
 
 enum VoiceEngine: String, CaseIterable, Identifiable {
@@ -63,6 +76,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("provider") var providerRaw: String = LLMProvider.anthropic.rawValue
     @AppStorage("anthropicModel") var anthropicModel: String = LLMProvider.anthropic.defaultModel
     @AppStorage("openaiModel") var openaiModel: String = LLMProvider.openai.defaultModel
+    @AppStorage("openrouterModel") var openrouterModel: String = LLMProvider.openrouter.defaultModel
     @AppStorage("voiceEngine") var voiceEngineRaw: String = VoiceEngine.system.rawValue
     @AppStorage("openaiVoice") var openaiVoice: String = "alloy"
     @AppStorage("systemVoiceID") var systemVoiceID: String = ""
@@ -75,6 +89,9 @@ final class AppSettings: ObservableObject {
     }
     @Published var openaiKey: String = Keychain.get("openai") {
         didSet { Keychain.set(openaiKey, for: "openai") }
+    }
+    @Published var openrouterKey: String = Keychain.get("openrouter") {
+        didSet { Keychain.set(openrouterKey, for: "openrouter") }
     }
 
     var provider: LLMProvider {
@@ -89,8 +106,21 @@ final class AppSettings: ObservableObject {
 
     var cursorColor: Color { Color(hex: cursorColorHex) ?? .blue }
 
-    var activeModel: String { provider == .anthropic ? anthropicModel : openaiModel }
-    var activeKey: String { provider == .anthropic ? anthropicKey : openaiKey }
+    var activeModel: String {
+        switch provider {
+        case .anthropic: return anthropicModel
+        case .openai: return openaiModel
+        case .openrouter: return openrouterModel
+        }
+    }
+
+    var activeKey: String {
+        switch provider {
+        case .anthropic: return anthropicKey
+        case .openai: return openaiKey
+        case .openrouter: return openrouterKey
+        }
+    }
 }
 
 extension Color {

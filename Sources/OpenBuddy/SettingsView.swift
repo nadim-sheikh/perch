@@ -6,6 +6,8 @@ struct SettingsView: View {
     @AppStorage("provider") private var provider = LLMProvider.anthropic.rawValue
     @AppStorage("anthropicModel") private var anthropicModel = LLMProvider.anthropic.defaultModel
     @AppStorage("openaiModel") private var openaiModel = LLMProvider.openai.defaultModel
+    @AppStorage("openrouterModel") private var openrouterModel = LLMProvider.openrouter.defaultModel
+    @State private var openrouterModels: [String] = []
     @AppStorage("voiceEngine") private var voiceEngine = VoiceEngine.system.rawValue
     @AppStorage("openaiVoice") private var openaiVoice = "alloy"
     @AppStorage("systemVoiceID") private var systemVoiceID = ""
@@ -24,15 +26,30 @@ struct SettingsView: View {
                     Picker("Provider", selection: $provider) {
                         ForEach(LLMProvider.allCases) { Text($0.displayName).tag($0.rawValue) }
                     }
-                    if provider == LLMProvider.anthropic.rawValue {
+                    switch LLMProvider(rawValue: provider) ?? .anthropic {
+                    case .anthropic:
                         TextField("Claude model", text: $anthropicModel)
-                    } else {
+                    case .openai:
                         TextField("OpenAI model", text: $openaiModel)
+                    case .openrouter:
+                        TextField("OpenRouter model", text: $openrouterModel)
+                        if !openrouterModels.isEmpty {
+                            Picker("Pick a model that can see images", selection: $openrouterModel) {
+                                if !openrouterModels.contains(openrouterModel) {
+                                    Text(openrouterModel).tag(openrouterModel)
+                                }
+                                ForEach(openrouterModels, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                        Button("Load OpenRouter models") {
+                            Task { openrouterModels = await OpenRouterCatalog.visionModels() }
+                        }
                     }
                 }
                 Section("API keys (stored in your Keychain)") {
                     SecureField("Anthropic API key", text: $settings.anthropicKey)
                     SecureField("OpenAI API key", text: $settings.openaiKey)
+                    SecureField("OpenRouter API key", text: $settings.openrouterKey)
                     Text("Keys never leave your Mac except to call the provider you chose.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -147,5 +164,23 @@ struct PermissionRow: View {
             Spacer()
             if !granted { Button("Grant", action: action) }
         }
+    }
+}
+
+/// Lists OpenRouter models that accept image input (needed to see the screen).
+enum OpenRouterCatalog {
+    static func visionModels() async -> [String] {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/models"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = obj["data"] as? [[String: Any]] else { return [] }
+        return models.compactMap { m -> String? in
+            guard let id = m["id"] as? String, !id.hasSuffix(":batch"),
+                  let arch = m["architecture"] as? [String: Any],
+                  let inputs = arch["input_modalities"] as? [String],
+                  inputs.contains("image") else { return nil }
+            return id
+        }
+        .sorted()
     }
 }
