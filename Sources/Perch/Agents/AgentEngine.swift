@@ -299,7 +299,11 @@ enum OpenRouterChat {
                          onText: (String) -> Void) async throws -> Reply {
         guard !apiKey.isEmpty else { throw AgentEngineError.missingKey }
         var body: [String: Any] = ["model": model, "messages": messages, "stream": true, "usage": ["include": true],
-                                   "max_tokens": maxTokens]
+                                   "max_tokens": maxTokens,
+                                   // Helpers act step by step: keep each step's hidden thinking short and use the
+                                   // quickest provider, since every step waits on the one before.
+                                   "reasoning": ["effort": "low"],
+                                   "provider": ["sort": "latency"]]
         if !tools.isEmpty { body["tools"] = tools }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"

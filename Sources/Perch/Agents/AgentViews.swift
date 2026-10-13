@@ -400,7 +400,7 @@ struct AgentComposer: View {
                 .padding(.horizontal, 14).frame(height: 36)
                 .background(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
             }
-            Text("Release to send").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.textTertiary).padding(.leading, 8)
+            ReleaseHint().padding(.leading, 8)
         }
         .padding(.horizontal, 22).padding(.bottom, 12)
     }

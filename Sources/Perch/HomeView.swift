@@ -426,8 +426,7 @@ struct ConversationView: View {
                 TypeField().frame(width: 170)
             }
             .padding(.horizontal, 22).padding(.bottom, 8)
-            Text("Release to send")
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.textTertiary)
+            ReleaseHint()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 30).padding(.bottom, 12)
         }
@@ -500,6 +499,17 @@ struct TypingDots: View {
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.08)))
         .onAppear { withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 } }
+    }
+}
+
+/// "Release to send", shown only while the user is holding to talk.
+struct ReleaseHint: View {
+    @ObservedObject var state = BuddyState.shared
+
+    var body: some View {
+        Text("Release to send").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.textTertiary)
+            .opacity(state.phase == .listening ? 1 : 0)
+            .animation(.easeOut(duration: 0.15), value: state.phase == .listening)
     }
 }
 

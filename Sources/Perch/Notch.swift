@@ -257,6 +257,8 @@ final class NotchController {
         let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(mouse)
         panel.ignoresMouseEvents = !inside && !model.textInputOpen && current != .home
         if current == .home { homeDismissCheck(inside: inside, now: now) } else { homeMouseLeftAt = nil; homeMouseEntered = false }
+        // Just closed Home: don't turn straight into the peek; wait until the mouse leaves and comes back.
+        if current == .home && !model.homeOpen { suppressUntilReentry = true }
         if model.hovering != inside { model.hovering = inside }
 
         // Hover dwell → peek, with re-entry suppression after an explicit dismiss.
@@ -400,6 +402,8 @@ struct NotchRootView: View {
     /// Keeps Home's content alive for a moment while the shape shrinks over it.
     @State private var homeClosingUntil = Date.distantPast
     @State private var homeContentVisible = false
+    /// True while the shape shrinks out of Home; the small views wait so they aren't laid out at Home's size.
+    @State private var homeShrinking = false
     private var homeMounted: Bool { model.presentation == .home || Date() < homeClosingUntil }
 
     var body: some View {
@@ -433,6 +437,7 @@ struct NotchRootView: View {
                         insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(.easeOut(duration: 0.22).delay(0.08)),
                         removal: .opacity.animation(.easeIn(duration: 0.1))))
                     .id(contentKey)
+                    .opacity(homeShrinking ? 0 : 1)
                 }
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .clipShape(NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11))
@@ -456,7 +461,11 @@ struct NotchRootView: View {
                 }
             } else if old == .home {
                 withAnimation(.easeIn(duration: 0.15)) { homeContentVisible = false }
+                homeShrinking = true
                 homeClosingUntil = Date().addingTimeInterval(0.55)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    if model.presentation != .home { withAnimation(.easeOut(duration: 0.18)) { homeShrinking = false } }
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { homeClosingUntil = .distantPast }
             }
         }

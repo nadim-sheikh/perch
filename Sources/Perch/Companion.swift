@@ -33,6 +33,7 @@ final class Companion {
 
     func beginListening() {
         interrupt()
+        Warmup.connection()
         let session = listenSession
         state.phase = .listening
         state.bubbleText = ""
@@ -126,6 +127,7 @@ final class Companion {
     }
 
     private func ask(_ question: String, inNotch: Bool = false) async {
+        Timing.begin("ask")
         let settings = AppSettings.shared
         let notch = NotchModel.shared
         if inNotch { notch.showResponse(question: question) }
@@ -163,6 +165,7 @@ final class Companion {
         if ScreenCapture.hasPermission() {
             // Only the screen with the cursor: every extra screenshot costs tokens.
             screens = ((try? await ScreenCapture.captureCursorScreen()) ?? nil).map { [$0] } ?? []
+            Timing.mark("screenshot ready")
         }
         // interrupt() already stopped the speaker; starting live speech now would leave it polling.
         if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
@@ -206,10 +209,11 @@ final class Companion {
         do {
             // Without the trigger word Perch only shows how: a plain, fast reply with markers, no actions.
             let system = Prompts.system(name: settings.buddyName, screenCount: screens.count) + AgentTrigger.guideInstructions
-            let stream = LLMClient().stream(system: system, history: history, prompt: question, screens: screens)
+            // Spoken replies are short; a tight cap keeps the model from rambling.
+            let stream = LLMClient(maxTokens: 350).stream(system: system, history: history, prompt: question, screens: screens)
             for try await chunk in stream {
                 if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
-                if full.isEmpty { perchLog.notice("ask: first chunk") }
+                if full.isEmpty { perchLog.notice("ask: first chunk"); Timing.mark("first text") }
                 full += chunk
                 state.phase = .responding
                 if Date().timeIntervalSince(lastRefresh) >= 0.05 { refresh() }
@@ -422,5 +426,31 @@ enum AgentTrigger {
         and a HIGHLIGHT (or CIRCLE/ARROW). For longer tasks give just the next step and say you'll guide them on. \
         If they ask you to actually do it for them, tell them to start with the word "\(word)" and a helper will handle it.
         """
+    }
+}
+
+
+/// Measures how long each stage of a reply takes (written to ~/Perch/debug.log).
+@MainActor
+enum Timing {
+    private static var start = Date()
+    static func begin(_ what: String) { start = Date(); DebugLog.write("timing: start \(what)") }
+    static func mark(_ what: String) {
+        DebugLog.write(String(format: "timing: %@ +%.2fs", what, Date().timeIntervalSince(start)))
+    }
+}
+
+
+/// Opens the connection to OpenRouter while the user is still talking, so the real request
+/// doesn't pay for DNS and TLS setup.
+enum Warmup {
+    private static var last = Date.distantPast
+    static func connection() {
+        guard Date().timeIntervalSince(last) > 20, let url = URL(string: "https://openrouter.ai/api/v1/models?limit=1") else { return }
+        last = Date()
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 4
+        URLSession.shared.dataTask(with: req).resume()
     }
 }

@@ -34,6 +34,8 @@ struct LLMClient {
     var apiKey = AppSettings.shared.openrouterKey
     var model = PerchModel.id
     var maxTokens = 4096
+    /// Skip the model's hidden "thinking" pass. It was adding ~5s before the first word.
+    var thinking = false
 
     func stream(
         system: String,
@@ -86,7 +88,11 @@ struct LLMClient {
         var messages: [[String: Any]] = [["role": "system", "content": system]]
         messages += history.map { ["role": $0.role.rawValue, "content": $0.text] }
         messages.append(["role": "user", "content": content])
-        let body: [String: Any] = ["model": model, "stream": true, "max_tokens": maxTokens, "messages": messages]
+        var body: [String: Any] = ["model": model, "stream": true, "max_tokens": maxTokens, "messages": messages,
+                                   // Route to whichever provider answers first.
+                                   "provider": ["sort": "latency"]]
+        // GLM 5.3 Flash can't switch reasoning off ("minimal" is refused with a 400), so "low" is the fastest it allows.
+        if !thinking { body["reasoning"] = ["effort": "low"] }
 
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

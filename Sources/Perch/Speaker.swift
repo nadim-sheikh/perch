@@ -79,7 +79,7 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
             player.delegate = self
             await withCheckedContinuation { cont in
                 done = cont
-                player.play()
+                player.play(); Timing.mark("audio playing")
             }
             if gen != generation { return }
             if i + 1 < sentences.count {
@@ -141,7 +141,7 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
                 player.delegate = self
                 await withCheckedContinuation { cont in
                     self.done = cont
-                    player.play()
+                    player.play(); Timing.mark("audio playing")
                 }
                 guard gen == self.generation else { break }
                 try? await Task.sleep(nanoseconds: 140_000_000)
