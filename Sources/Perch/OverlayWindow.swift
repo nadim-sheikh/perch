@@ -43,7 +43,7 @@ final class OverlayManager {
         panels.forEach { $0.orderOut(nil) }
         panels = NSScreen.screens.map { screen in
             let panel = OverlayPanel(screen: screen)
-            let view = BuddyOverlayView(screenFrame: screen.frame, holdsNotch: screen == NotchController.hostScreen)
+            let view = BuddyOverlayView(screenFrame: screen.frame)
                 .environmentObject(BuddyState.shared)
                 .environmentObject(AppSettings.shared)
             panel.contentView = NSHostingView(rootView: view)
@@ -55,8 +55,8 @@ final class OverlayManager {
 
 struct BuddyOverlayView: View {
     let screenFrame: CGRect
-    /// This panel's screen shows the notch island, so the buddy tucks away under it.
-    let holdsNotch: Bool
+    /// This panel's screen shows the notch island (it follows the mouse), so the buddy tucks away under it.
+    private var holdsNotch: Bool { NotchController.hostScreen?.frame == screenFrame }
     @EnvironmentObject var state: BuddyState
     @EnvironmentObject var settings: AppSettings
     @AppStorage("cursorColorHex") private var cursorColorHex = "#3B82F6"

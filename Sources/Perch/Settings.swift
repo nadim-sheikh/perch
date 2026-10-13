@@ -2,11 +2,50 @@ import Foundation
 import Security
 import SwiftUI
 
-/// The one model Perch uses for everything: talking, acting on the screen, helpers, squads and
-/// fixing text. It runs on the user's OpenRouter key and can see screenshots and call tools.
+/// The model Perch uses for everything: talking, showing on screen, helpers and fixing text.
+/// It runs on the user's OpenRouter key and is switchable in Settings → AI Models.
 enum PerchModel {
-    static let id = "z-ai/glm-5.3-flash"
-    static let name = "GLM 5.3 Flash"
+    struct Choice: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let note: String
+    }
+
+    /// Fast models that can see screenshots and use tools.
+    static let choices: [Choice] = [
+        Choice(id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash", note: "Fastest and cheapest (about 2.5s to speak)."),
+        Choice(id: "google/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite", note: "Light, but often slow to start (5s+)."),
+        Choice(id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash", note: "Smart, steady (about 4.5s)."),
+        Choice(id: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5", note: "Good at pointing (about 4s)."),
+        Choice(id: "openai/gpt-5.6-luna", name: "GPT-5.6 Luna", note: "Affordable (about 4.5s)."),
+    ]
+
+    static let defaultID = "z-ai/glm-5.3-flash"
+
+    static var id: String {
+        let saved = UserDefaults.standard.string(forKey: "perchModel")?.trimmingCharacters(in: .whitespaces) ?? ""
+        return saved.isEmpty ? defaultID : saved
+    }
+
+    static var name: String { choices.first { $0.id == id }?.name ?? id }
+
+    /// Models that always think before answering. For these we ask for the shortest thinking;
+    /// for everything else we send nothing, since asking would switch thinking *on* and slow it down.
+    static func mandatoryReasoning(_ model: String) -> Bool {
+        model.hasPrefix("z-ai/glm")
+    }
+
+    /// Gemini also always thinks, but accepts "minimal", which is the quickest setting it allows.
+    static func thinksByDefault(_ model: String) -> Bool {
+        model.hasPrefix("google/gemini")
+    }
+
+    /// The reasoning setting to send for a model, or nil to leave it alone.
+    static func reasoningParam(_ model: String, effort: String = "low") -> [String: Any]? {
+        if mandatoryReasoning(model) { return ["effort": effort] }
+        if thinksByDefault(model) { return ["effort": "minimal"] }
+        return nil
+    }
 }
 
 enum VoiceEngine: String, CaseIterable, Identifiable {

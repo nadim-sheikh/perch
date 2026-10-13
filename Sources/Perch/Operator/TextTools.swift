@@ -180,8 +180,10 @@ final class TextTools {
     private static func correct(_ text: String) async throws -> String? {
         let client = LLMClient()
         let system = """
-        You are a precise copy editor. Fix only spelling, grammar and obvious typos in the user's text. \
-        Keep the original meaning, tone, wording choices, language, capitalization style and line breaks. \
+        You are a precise copy editor. Check every word of the user's text and fix all spelling mistakes, \
+        typos, misspelled contractions (e.g. "dident" → "didn't", "dont" → "don't"), wrong word forms \
+        (e.g. "you're" vs "your", "there" vs "their") and grammar. Capitalize "I" and the first letter of each sentence. \
+        Keep the original meaning, tone, wording choices, language and line breaks. \
         Do not rephrase, translate, add, remove or explain anything. Reply with ONLY the corrected text, nothing else.
         """
         var out = ""

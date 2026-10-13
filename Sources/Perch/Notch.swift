@@ -50,6 +50,29 @@ final class NotchModel: ObservableObject {
         requestKeyFocus?()
     }
 
+    /// What a compact strip says, so the view and the hit area agree on its width.
+    func stripLabel(_ p: Presentation) -> String {
+        switch p {
+        case .listening: return "Listening…"
+        case .thinking: return "Hmm, thinking…"
+        case .speaking: return "Talking"
+        case .agents:
+            let running = AgentRoster.shared.agents.filter { AgentManager.shared.running.contains($0.id) }
+            guard !running.isEmpty else { return "" }
+            return running.count > 1 ? "\(running.count) helpers working" : "\(running[agentRotation % running.count].name)…"
+        default: return ""
+        }
+    }
+
+    /// A compact strip wide enough for its label: two equal ears around the camera housing,
+    /// each holding padding, an 18pt face or avatar, a gap and the text.
+    func stripWidth(_ p: Presentation) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        let label = ceil((stripLabel(p) as NSString).size(withAttributes: [.font: font]).width)
+        let ear = 14 + 18 + 7 + label + 12
+        return max(collapsedWidth + 120, max(hardwareNotchWidth, 0) + 10 + 2 * ear)
+    }
+
     /// Shrinks Home back into the notch.
     func closeHome() {
         guard homeOpen else { return }
@@ -193,14 +216,21 @@ final class NotchController {
         }
     }
 
-    /// The screen that holds the island: the one with a camera notch, else the menu-bar screen.
-    static var hostScreen: NSScreen? {
-        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.screens.first
+    /// The screen that holds the island. It follows the mouse, so the notch is on whichever
+    /// display you're using: in the camera notch on a MacBook, a small pill on other screens.
+    private(set) static var hostScreen: NSScreen? = NSScreen.main
+
+    private static func screenUnderMouse() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first
     }
 
     private func layout() {
-        guard let s = Self.hostScreen else { return }
-        model.notchHeight = max(s.safeAreaInsets.top, 28)
+        guard let s = Self.screenUnderMouse() else { return }
+        Self.hostScreen = s
+        // A real notch sets the height; elsewhere match the menu bar so the pill sits in it.
+        let menuBar = s.frame.maxY - s.visibleFrame.maxY
+        model.notchHeight = s.safeAreaInsets.top > 0 ? s.safeAreaInsets.top : max(menuBar, 24)
         if let left = s.auxiliaryTopLeftArea, let right = s.auxiliaryTopRightArea {
             model.hardwareNotchWidth = s.frame.width - left.width - right.width
         } else {
@@ -214,7 +244,7 @@ final class NotchController {
     private func visibleSize(_ p: NotchModel.Presentation) -> CGSize {
         switch p {
         case .docked: return CGSize(width: model.collapsedWidth, height: model.notchHeight)
-        case .listening, .thinking, .speaking, .agents: return CGSize(width: model.collapsedWidth + 120, height: model.notchHeight)
+        case .listening, .thinking, .speaking, .agents: return CGSize(width: model.stripWidth(p), height: model.notchHeight)
         case .peek: return CGSize(width: 480, height: 400)
         case .textInput: return CGSize(width: 480, height: 150)
         case .textResponse: return CGSize(width: 480, height: 330)
@@ -254,6 +284,10 @@ final class NotchController {
         lastTick = now
         let mouse = NSEvent.mouseLocation
         let current = model.presentation
+        // Move to the display the mouse is on, but never while a card or Home is open on this one.
+        if !current.isCard, !model.textInputOpen, let s = Self.screenUnderMouse(), s != Self.hostScreen {
+            layout()
+        }
         let inside = hitRect(current, inflate: current.isCard ? 12 : 6).contains(mouse)
         panel.ignoresMouseEvents = !inside && !model.textInputOpen && current != .home
         if current == .home { homeDismissCheck(inside: inside, now: now) } else { homeMouseLeftAt = nil; homeMouseEntered = false }
@@ -335,9 +369,6 @@ final class NotchController {
         return .docked
     }
 
-    func handleClickOnDocked() {
-        model.openHome?(nil)
-    }
 }
 
 /// Black shape with concave top "shoulders" and rounded bottom corners.
@@ -377,7 +408,7 @@ struct NotchRootView: View {
     private var size: CGSize {
         switch model.presentation {
         case .docked: return CGSize(width: model.collapsedWidth, height: model.notchHeight)
-        case .listening, .thinking, .speaking, .agents: return CGSize(width: model.collapsedWidth + 120, height: model.notchHeight)
+        case .listening, .thinking, .speaking, .agents: return CGSize(width: model.stripWidth(model.presentation), height: model.notchHeight)
         case .peek: return CGSize(width: 470, height: peekHeight)
         case .textInput: return CGSize(width: 470, height: model.notchHeight + 92)
         case .textResponse: return CGSize(width: 470, height: responseHeight)
@@ -443,10 +474,6 @@ struct NotchRootView: View {
                 .clipShape(NotchShape(radius: model.presentation == .home ? 28 : model.presentation.isCard ? 24 : 11))
                 .shadow(color: .black.opacity(model.presentation.isCard ? 0.45 : 0), radius: 18, y: 6)
                 .contentShape(NotchShape(radius: 11))
-                .onTapGesture {
-                    // The peek opens after a short hover, so a click on the island usually lands on it.
-                    if [.docked, .agents, .peek].contains(model.presentation) { model.openHome?(nil) }
-                }
             }
             .frame(width: size.width + 60, height: size.height, alignment: .top)
             Spacer(minLength: 0)
@@ -497,7 +524,8 @@ struct NotchRootView: View {
 
     private var dockedView: some View {
         strip {
-            MiniFace()
+            // The mascot shows Perch is running, even with nothing happening.
+            MascotView(size: 18, happy: true)
         } right: {
             if !agents.unread.isEmpty {
                 Text("\(agents.unread.count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
@@ -511,10 +539,10 @@ struct NotchRootView: View {
     private var activityStrip: some View {
         strip {
             MascotView(size: 18, happy: true)
-            Text(stripLabel).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+            Text(model.stripLabel(model.presentation)).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
                 .fixedSize()
                 .contentTransition(.interpolate)
-                .animation(.easeInOut(duration: 0.25), value: stripLabel)
+                .animation(.easeInOut(duration: 0.25), value: model.presentation)
         } right: {
             ZStack(alignment: .trailing) {
                 if model.presentation == .listening {
@@ -530,21 +558,13 @@ struct NotchRootView: View {
         }
     }
 
-    private var stripLabel: String {
-        switch model.presentation {
-        case .listening: return "Listening…"
-        case .thinking: return "Hmm, thinking…"
-        default: return "Talking"
-        }
-    }
-
     private var agentStrip: some View {
         let running = roster.agents.filter { agents.running.contains($0.id) }
         let agent = running.isEmpty ? nil : running[model.agentRotation % running.count]
         return strip {
             if let agent {
                 AgentAvatar(agent: agent, size: 18)
-                Text(running.count > 1 ? "\(running.count) helpers working" : "\(agent.name)…")
+                Text(model.stripLabel(.agents))
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
                     .fixedSize()
                     .id(agent.id)
@@ -560,8 +580,7 @@ struct NotchRootView: View {
     private var peek: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Button { model.openHome?(nil) } label: { LogoGlyph().frame(width: 20, height: 12) }
-                    .buttonStyle(.plain)
+                LogoGlyph().frame(width: 20, height: 12)
                 Spacer()
                 Button { model.openSettings?() } label: { Image(systemName: "gearshape.fill") }
                     .buttonStyle(IconButtonStyle())
@@ -815,25 +834,6 @@ struct CountdownRing: View {
 // MARK: Little animations
 
 /// Two eyes that blink now and then, shown in the docked island.
-struct MiniFace: View {
-    @State private var blink = false
-    var body: some View {
-        HStack(spacing: 5) {
-            Capsule().fill(Color.white).frame(width: 4, height: blink ? 1 : 6)
-            Capsule().fill(Color.white).frame(width: 4, height: blink ? 1 : 6)
-        }
-        .frame(height: 8)
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Double.random(in: 2.5...5)))
-                withAnimation(.easeInOut(duration: 0.08)) { blink = true }
-                try? await Task.sleep(for: .milliseconds(120))
-                withAnimation(.easeInOut(duration: 0.1)) { blink = false }
-            }
-        }
-    }
-}
-
 struct WaveBars: View {
     let level: Float
     let color: Color

@@ -92,7 +92,7 @@ struct LLMClient {
                                    // Route to whichever provider answers first.
                                    "provider": ["sort": "latency"]]
         // GLM 5.3 Flash can't switch reasoning off ("minimal" is refused with a 400), so "low" is the fastest it allows.
-        if !thinking { body["reasoning"] = ["effort": "low"] }
+        if !thinking, let r = PerchModel.reasoningParam(model) { body["reasoning"] = r }
 
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

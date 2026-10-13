@@ -302,8 +302,8 @@ enum OpenRouterChat {
                                    "max_tokens": maxTokens,
                                    // Helpers act step by step: keep each step's hidden thinking short and use the
                                    // quickest provider, since every step waits on the one before.
-                                   "reasoning": ["effort": "low"],
                                    "provider": ["sort": "latency"]]
+        if let r = PerchModel.reasoningParam(model) { body["reasoning"] = r }
         if !tools.isEmpty { body["tools"] = tools }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"

@@ -57,10 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await SpeechRecognizer.requestPermissions()
             if !ScreenCapture.hasPermission() { ScreenCapture.requestPermission() }
             _ = PushToTalkMonitor.hasAccessibility(prompt: true)
-            if !AppSettings.shared.hasKey && !CommandLine.arguments.contains("--home") {
+            // Home opens when the user clicks a chat or the expand button. The exception is a first
+            // run with no key, where Home opens on AI Models to ask for one.
+            if !AppSettings.shared.hasKey {
                 HomeRouter.shared.settings = .ai
+                showHome()
+            } else if CommandLine.arguments.contains("--home") {
+                showHome()
             }
-            showHome()
         }
     }
 

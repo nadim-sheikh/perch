@@ -223,13 +223,42 @@ private struct GeneralPage: View {
 
 private struct AIPage: View {
     @ObservedObject var settings = AppSettings.shared
+    @AppStorage("perchModel") private var model = PerchModel.defaultID
+    @State private var custom = ""
+    @State private var speed: [String: String] = [:]
+    @State private var testing: String?
+
+    private var isCustom: Bool { !PerchModel.choices.contains { $0.id == model } }
 
     var body: some View {
         SettingsGroup(title: "Model") {
-            SettingsRow(title: PerchModel.name, subtitle: "Used for everything: talking, acting on your screen, helpers and fixing text. It runs on your OpenRouter key.", last: true) {
-                EmptyView()
+            ForEach(PerchModel.choices) { c in
+                SettingsRow(title: c.name, subtitle: speed[c.id].map { "\(c.note) · \($0)" } ?? c.note) {
+                    HStack(spacing: 8) {
+                        Button(testing == c.id ? "Testing…" : "Test speed") { test(c.id) }
+                            .buttonStyle(ChipStyle())
+                            .disabled(testing != nil || settings.openrouterKey.isEmpty)
+                        Image(systemName: model == c.id ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 16))
+                            .foregroundStyle(model == c.id ? Theme.accent : Theme.textTertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { model = c.id }
+            }
+            SettingsRow(title: "Custom", subtitle: "Any OpenRouter model id that can see images.", last: true) {
+                HStack(spacing: 8) {
+                    TextField("provider/model", text: $custom).settingsField()
+                        .onSubmit { if !custom.trimmingCharacters(in: .whitespaces).isEmpty { model = custom.trimmingCharacters(in: .whitespaces) } }
+                    Image(systemName: isCustom ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(isCustom ? Theme.accent : Theme.textTertiary)
+                }
             }
         }
+        .onAppear { if isCustom { custom = model } }
+        Text("Used for everything: talking, showing on screen, helpers and fixing text.")
+            .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
 
         SettingsGroup(title: "API key") {
             SettingsRow(title: "OpenRouter", subtitle: nil) {
@@ -246,6 +275,30 @@ private struct AIPage: View {
         }
         Link("Get a key at openrouter.ai/keys", destination: URL(string: "https://openrouter.ai/keys")!)
             .font(.system(size: 11))
+    }
+
+    /// Times a tiny request: how long until the model's first word, and the whole reply.
+    private func test(_ id: String) {
+        testing = id
+        Task {
+            let start = Date()
+            var first: Double?
+            var ok = false
+            do {
+                let client = LLMClient(model: id, maxTokens: 40)
+                for try await chunk in client.stream(system: "Reply in one short sentence.", history: [], prompt: "Say hi.", screens: []) {
+                    if first == nil && !chunk.trimmingCharacters(in: .whitespaces).isEmpty { first = Date().timeIntervalSince(start) }
+                }
+                ok = true
+            } catch {
+                speed[id] = "error: \(error.localizedDescription.prefix(60))"
+            }
+            if ok {
+                let total = Date().timeIntervalSince(start)
+                speed[id] = String(format: "first word %.1fs, done %.1fs", first ?? total, total)
+            }
+            testing = nil
+        }
     }
 }
 
