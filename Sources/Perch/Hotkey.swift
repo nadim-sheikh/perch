@@ -15,7 +15,6 @@ final class PushToTalkMonitor {
     var onDoubleTapControl: (() -> Void)?
     var onDictateStart: (() -> Void)?
     var onDictateEnd: (() -> Void)?
-    var onFixText: (() -> Void)?
 
     private var controlDownAt: Date?
     private var lastControlTapAt: Date?
@@ -94,8 +93,7 @@ final class PushToTalkMonitor {
         pendingTalk?.cancel(); pendingTalk = nil
         pendingDictate?.cancel(); pendingDictate = nil
 
-        let flags = event.modifierFlags.intersection([.control, .option, .command, .shift])
-        if flags == [.control, .option], event.keyCode == 3 { onFixText?() }   // F
+        _ = event
     }
 
     private func detectControlDoubleTap(_ flags: NSEvent.ModifierFlags) {

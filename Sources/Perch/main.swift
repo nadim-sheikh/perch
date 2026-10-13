@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 @MainActor
@@ -9,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let companion = Companion.shared
     private let hotkey = PushToTalkMonitor()
     private var askPanel: NSPanel?
+    private var fixHotKey: CarbonHotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
@@ -42,8 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onDoubleTapControl = { NotchModel.shared.openTextInput() }
         hotkey.onDictateStart = { TextTools.shared.startDictation() }
         hotkey.onDictateEnd = { TextTools.shared.endDictation() }
-        hotkey.onFixText = { TextTools.shared.fixFocusedText() }
         hotkey.start()
+        // Option+Shift+U fixes the selected text (consumed so no accent is typed).
+        fixHotKey = CarbonHotKey(keyCode: UInt32(kVK_ANSI_U), modifiers: UInt32(optionKey | shiftKey)) {
+            TextTools.shared.fixFocusedText()
+        }
+        DebugLog.write("fix hotkey Option+Shift+U registered: \(fixHotKey != nil)")
         AppAppearance.apply()
 
         Task {

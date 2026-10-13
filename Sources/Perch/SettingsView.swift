@@ -410,7 +410,7 @@ private struct ShortcutsPage: View {
         }
         SettingsGroup(title: "In any text box") {
             SettingsRow(title: "Dictate", subtitle: "Hold, speak, and your words are typed where the cursor is.") { KeyCaps(keys: ["⌃ control", "⇧ shift"]) }
-            SettingsRow(title: "Fix spelling & grammar", subtitle: "Fixes the selected text, or the whole box, in place.", last: true) { KeyCaps(keys: ["⌃ control", "⌥ option", "F"]) }
+            SettingsRow(title: "Fix spelling & grammar", subtitle: "Select text, then fix it in place.", last: true) { KeyCaps(keys: ["⌥ option", "⇧ shift", "U"]) }
         }
     }
 }

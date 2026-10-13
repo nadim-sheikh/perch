@@ -1,4 +1,5 @@
 import AppKit
+import os
 import ApplicationServices
 import SwiftUI
 
@@ -8,6 +9,7 @@ import SwiftUI
 ///   spelling and grammar cleaned up in place.
 @MainActor
 final class TextTools {
+    private let log = Logger(subsystem: "dev.perch.app", category: "texttools")
     static let shared = TextTools()
 
     private let speech = SpeechRecognizer()
@@ -53,14 +55,16 @@ final class TextTools {
     // MARK: Fix spelling & grammar (press once)
 
     func fixFocusedText() {
-        guard !busyFixing, !dictating else { return }
-        guard AppSettings.shared.hasAnyKey else { flash("Add an API key in Settings first."); return }
-        guard let el = Self.focusedTextElement() else { flash("Click into a text box first."); return }
+        DebugLog.write("fixFocusedText fired")
+        guard !busyFixing, !dictating else { DebugLog.write("busy/dictating, skip"); return }
+        guard AppSettings.shared.hasAnyKey else { DebugLog.write("no api key"); flash("Add an API key in Settings first."); return }
+        guard let el = Self.focusedTextElement() else { DebugLog.write("no focused text element"); flash("Click into a text box first."); return }
 
         let selected = Self.string(el, kAXSelectedTextAttribute) ?? ""
         let whole = Self.string(el, kAXValueAttribute) ?? ""
         let hasSelection = !selected.trimmingCharacters(in: .whitespaces).isEmpty
         let source = hasSelection ? selected : whole
+        DebugLog.write("element ok; hasSelection=\(hasSelection) selLen=\(selected.count) wholeLen=\(whole.count)")
 
         guard !source.trimmingCharacters(in: .whitespaces).isEmpty else { flash("Nothing to fix here."); return }
         guard source.count <= 4000 else { flash("That's a lot. Select the part you want fixed."); return }
@@ -76,6 +80,7 @@ final class TextTools {
                 flash(fixed == nil ? "Couldn't fix that one." : "Looks good already.")
                 return
             }
+            DebugLog.write("replacing; fixedLen=\(fixed.count)")
             replace(in: el, hadSelection: hasSelection, with: fixed)
             flash("Fixed it.")
         }
