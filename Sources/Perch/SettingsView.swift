@@ -404,11 +404,14 @@ extension MicrophonePage {
 
 private struct ShortcutsPage: View {
     var body: some View {
-        SettingsGroup(title: "Talk") {
-            SettingsRow(title: "Push to talk", subtitle: "Hold to talk, release to send.") { KeyCaps(keys: ["⌃ control", "⌥ option"]) }
-            SettingsRow(title: "Ask by typing", subtitle: "From the menu bar icon.", last: true) { KeyCaps(keys: ["⌘", "K"]) }
+        SettingsGroup(title: "Talk & type") {
+            SettingsRow(title: "Talk to Perch", subtitle: "Hold, speak, release.") { KeyCaps(keys: ["⌃ control", "⌥ option"]) }
+            SettingsRow(title: "Type to Perch", subtitle: "Opens the box in the notch.", last: true) { KeyCaps(keys: ["⌃ control", "⌃ control"]) }
         }
-        Text("Custom shortcuts are coming in Phase 2.").font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+        SettingsGroup(title: "In any text box") {
+            SettingsRow(title: "Dictate", subtitle: "Hold, speak, and your words are typed where the cursor is.") { KeyCaps(keys: ["⌃ control", "⇧ shift"]) }
+            SettingsRow(title: "Fix spelling & grammar", subtitle: "Fixes the selected text, or the whole box, in place.", last: true) { KeyCaps(keys: ["⌃ control", "⌥ option", "F"]) }
+        }
     }
 }
 

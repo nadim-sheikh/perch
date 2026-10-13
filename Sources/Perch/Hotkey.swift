@@ -1,44 +1,66 @@
 import AppKit
 
-/// Hold Control+Option (and nothing else) to talk. Uses a global modifier
-/// monitor, which needs Accessibility permission to see keys in other apps.
+/// Global keyboard shortcuts. Needs Accessibility permission to see keys in other apps.
+/// - Hold Control+Option: talk to Perch.
+/// - Double-tap Control: open the type box in the notch.
+/// - Hold Control+Shift: dictate into the focused text field.
+/// - Press Control+Option+F: fix spelling in the focused text field.
 @MainActor
 final class PushToTalkMonitor {
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
-    /// Double-tapping Control on its own opens the typing box.
     var onDoubleTapControl: (() -> Void)?
+    var onDictateStart: (() -> Void)?
+    var onDictateEnd: (() -> Void)?
+    var onFixText: (() -> Void)?
 
     private var controlDownAt: Date?
     private var lastControlTapAt: Date?
     private var otherKeyDuringControl = false
 
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private var flagsGlobal: Any?
+    private var flagsLocal: Any?
+    private var keyGlobal: Any?
+    private var keyLocal: Any?
+
     private var isDown = false
-    private let combo: NSEvent.ModifierFlags = [.control, .option]
+    private var dictateDown = false
+    private let talkCombo: NSEvent.ModifierFlags = [.control, .option]
+    private let dictateCombo: NSEvent.ModifierFlags = [.control, .shift]
 
     func start() {
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
+        flagsGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+            MainActor.assumeIsolated { self?.handleFlags(e) }
         }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
-            return event
+        flagsLocal = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+            MainActor.assumeIsolated { self?.handleFlags(e) }
+            return e
+        }
+        keyGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            MainActor.assumeIsolated { self?.handleKey(e) }
+        }
+        keyLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            MainActor.assumeIsolated { self?.handleKey(e) }
+            return e
         }
     }
 
-    private func handle(_ event: NSEvent) {
+    private func handleFlags(_ event: NSEvent) {
         let flags = event.modifierFlags.intersection([.control, .option, .command, .shift])
         detectControlDoubleTap(flags)
-        let pressed = flags == combo
-        if pressed && !isDown {
-            isDown = true
-            onPress?()
-        } else if !pressed && isDown {
-            isDown = false
-            onRelease?()
-        }
+
+        let talk = flags == talkCombo
+        if talk && !isDown { isDown = true; onPress?() }
+        else if !talk && isDown { isDown = false; onRelease?() }
+
+        let dictate = flags == dictateCombo
+        if dictate && !dictateDown { dictateDown = true; onDictateStart?() }
+        else if !dictate && dictateDown { dictateDown = false; onDictateEnd?() }
+    }
+
+    private func handleKey(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.control, .option, .command, .shift])
+        if flags == [.control, .option], event.keyCode == 3 { onFixText?() }   // F
     }
 
     private func detectControlDoubleTap(_ flags: NSEvent.ModifierFlags) {

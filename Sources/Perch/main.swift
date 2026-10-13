@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onPress = { [weak self] in self?.companion.beginListening() }
         hotkey.onRelease = { [weak self] in self?.companion.endListening() }
         hotkey.onDoubleTapControl = { NotchModel.shared.openTextInput() }
+        hotkey.onDictateStart = { TextTools.shared.startDictation() }
+        hotkey.onDictateEnd = { TextTools.shared.endDictation() }
+        hotkey.onFixText = { TextTools.shared.fixFocusedText() }
         hotkey.start()
         AppAppearance.apply()
 

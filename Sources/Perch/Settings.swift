@@ -124,6 +124,8 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    var hasAnyKey: Bool { !anthropicKey.isEmpty || !openaiKey.isEmpty || !openrouterKey.isEmpty }
+
     var activeKey: String {
         switch provider {
         case .anthropic: return anthropicKey
