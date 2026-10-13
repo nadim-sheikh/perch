@@ -934,33 +934,6 @@ struct EqualizerBars: View {
     }
 }
 
-/// Coloured glow bleeding out of the notch corners while listening.
-struct CornerGlow: View {
-    let color: Color
-    var body: some View {
-        TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            Canvas { g, size in
-                let pulse = 0.7 + 0.25 * sin(t * .pi * 2 / 2.2)
-                let blobs: [(CGFloat, CGFloat, Color)] = [
-                    (0.08, 0.55, color), (0.92, 0.55, color),
-                    (0.5, 0.95, color.opacity(0.6)),
-                ]
-                for (i, b) in blobs.enumerated() {
-                    let dx = 10 * sin(t * .pi * 2 / 6 + Double(i))
-                    let dy = 6 * cos(t * .pi * 2 / 5 + Double(i))
-                    let c = CGPoint(x: size.width * b.0 + dx, y: size.height * b.1 + dy)
-                    let r: CGFloat = 26
-                    g.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)),
-                           with: .color(b.2.opacity(pulse * 0.8)))
-                }
-            }
-            .blur(radius: 18)
-            .blendMode(.plusLighter)
-        }
-        .allowsHitTesting(false)
-    }
-}
 
 /// "Connect GitHub to Perch?" card with example uses and No / Not now / Yes.
 struct NotchSuggestion: View {

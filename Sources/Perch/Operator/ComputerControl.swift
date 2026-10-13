@@ -28,17 +28,6 @@ enum ComputerControl {
         }
     }
 
-    static func drag(from a: CGPoint, to b: CGPoint) {
-        let qa = quartz(a), qb = quartz(b)
-        CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: qa, mouseButton: .left)?.post(tap: .cghidEventTap)
-        for i in 1...20 {
-            let t = CGFloat(i) / 20
-            let p = CGPoint(x: qa.x + (qb.x - qa.x) * t, y: qa.y + (qb.y - qa.y) * t)
-            CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
-            usleep(12_000)
-        }
-        CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: qb, mouseButton: .left)?.post(tap: .cghidEventTap)
-    }
 
     static func scroll(at p: CGPoint, dx: Int32, dy: Int32) {
         let q = quartz(p)
@@ -155,20 +144,7 @@ enum ComputerControl {
         return candidates.map({ ($0, score($0)) }).filter({ $0.1 >= minScore }).max(by: { $0.1 < $1.1 })?.0
     }
 
-    static func openFile(_ path: String, withApp app: String?) async -> Bool {
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        if let app, let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app)
-            ?? findApp(named: app) {
-            _ = try? await NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
-            return true
-        }
-        return NSWorkspace.shared.open(url)
-    }
 
-    private static func findApp(named name: String) -> URL? {
-        NSWorkspace.shared.runningApplications.first { $0.localizedName?.lowercased().contains(name.lowercased()) == true }?.bundleURL
-    }
 
     // MARK: Accessibility
 

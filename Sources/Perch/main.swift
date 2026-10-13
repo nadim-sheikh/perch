@@ -29,14 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.show()
         IntegrationSuggestions.shared.start()
         ElementMarks.startTracking()
-        if let i = CommandLine.arguments.firstIndex(of: "--say"), i + 1 < CommandLine.arguments.count {
-            let line = CommandLine.arguments[i + 1]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { Companion.shared.announce(line) }
-        }
-        if let i = CommandLine.arguments.firstIndex(of: "--ask"), i + 1 < CommandLine.arguments.count {
-            let question = CommandLine.arguments[i + 1]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { Companion.shared.askTyped(question) }
-        }
         SpeechRecognizer.preloadParakeet()
         Speaker.warmUp()
 

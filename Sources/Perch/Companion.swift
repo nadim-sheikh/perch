@@ -127,7 +127,6 @@ final class Companion {
     }
 
     private func ask(_ question: String, inNotch: Bool = false) async {
-        Timing.begin("ask")
         let settings = AppSettings.shared
         let notch = NotchModel.shared
         if inNotch { notch.showResponse(question: question) }
@@ -165,14 +164,12 @@ final class Companion {
         if ScreenCapture.hasPermission() {
             // Only the screen with the cursor: every extra screenshot costs tokens.
             screens = ((try? await ScreenCapture.captureCursorScreen()) ?? nil).map { [$0] } ?? []
-            Timing.mark("screenshot ready")
         }
         // Number the real buttons/menus on screen so marks land exactly (see ElementMarks).
         var elementMap: ElementMarks.Map?
         if let first = screens.first, let (map, numbered) = ElementMarks.build(for: first) {
             elementMap = map
             screens[0] = numbered
-            Timing.mark("elements: \(map.items.count)")
         }
         // interrupt() already stopped the speaker; starting live speech now would leave it polling.
         if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
@@ -232,7 +229,7 @@ final class Companion {
             let stream = LLMClient(maxTokens: 350).stream(system: system, history: history, prompt: question, screens: screens)
             for try await chunk in stream {
                 if Task.isCancelled { perchLog.notice("ask: cancelled"); return }
-                if full.isEmpty { perchLog.notice("ask: first chunk"); Timing.mark("first text") }
+                if full.isEmpty { perchLog.notice("ask: first chunk") }
                 full += chunk
                 state.phase = .responding
                 if Date().timeIntervalSince(lastRefresh) >= 0.05 { refresh() }
@@ -480,15 +477,6 @@ enum AgentTrigger {
 }
 
 
-/// Measures how long each stage of a reply takes (written to ~/Perch/debug.log).
-@MainActor
-enum Timing {
-    private static var start = Date()
-    static func begin(_ what: String) { start = Date(); DebugLog.write("timing: start \(what)") }
-    static func mark(_ what: String) {
-        DebugLog.write(String(format: "timing: %@ +%.2fs", what, Date().timeIntervalSince(start)))
-    }
-}
 
 
 /// Opens the connection to OpenRouter while the user is still talking, so the real request
